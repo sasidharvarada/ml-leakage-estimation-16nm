@@ -70,13 +70,14 @@
 +rshg    = 0.4             gbmin   = 1e-010          rbpb    = 5               rbpd    = 15            
 +rbps    = 15              rbdb    = 15              rbsb    = 15              ngcon   = 1
 
-M1 d g s b mdev W=3.200000e-08 L=1.600000e-08
+M1 d g s b mdev W=3.200000e-08 L=1.600000e-08 AD=1.280000e-15 AS=1.280000e-15 PD=1.440000e-07 PS=1.440000e-07
 Vd d 0 0.500000
 Vg g 0 0.000000
 Vs s 0 0.000000
 Vb b 0 0.000000
 
 .control
+set numdgt = 10
 op
 let id_ = -i(vd)
 let ig_ = -i(vg)

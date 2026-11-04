@@ -1,4 +1,3 @@
-"""Helpers: read the model file, build a single-transistor netlist, run ngspice."""
 import os
 import re
 import subprocess
@@ -7,13 +6,13 @@ import tempfile
 
 def split_models(model_path):
     """Return {'nmos': text, 'pmos': text} -- the two .model cards in the file."""
-    text = open(model_path).read()
+    with open(model_path, "r") as f:
+        text = f.read()
     parts = re.split(r"(?im)^(?=\s*\.model\s)", text)
     models = {}
     for p in parts:
         m = re.match(r"(?is)\s*\.model\s+(\S+)\s+(nmos|pmos)", p)
         if m:
-            # keep only the .model card itself (drop trailing comment lines)
             models[m.group(2).lower()] = p.strip()
     if set(models) != {"nmos", "pmos"}:
         raise ValueError(f"Expected one nmos and one pmos model in {model_path}")
@@ -21,7 +20,6 @@ def split_models(model_path):
 
 
 def _param_regex(name):
-    # word boundary so 'xj' does not match 'xjbvs', 'u0' does not match 'u0x'
     return re.compile(rf"(?i)(\b{name}\s*=\s*)([-+0-9.eE]+)")
 
 
@@ -44,20 +42,28 @@ def set_params(model_text, values, new_name):
 
 
 def build_netlist(model_card, dev_type, w, l, vd, vg, vs, vb, temp, options):
-    """Single-FET netlist. Every terminal has its own voltage source."""
+    """Single-FET netlist with explicit junction parasitics (AD, AS, PD, PS)."""
+    # Diffusion overhang L_diff = 2.5 * L (40nm for 16nm technology)
+    ldiff = 2.5 * l
+    ad = w * ldiff
+    as_ = w * ldiff
+    pd = 2.0 * (w + ldiff)
+    ps = 2.0 * (w + ldiff)
+
     return f"""* single {dev_type.upper()} leakage characterisation
 {options}
 .temp {temp:.4f}
 
 {model_card}
 
-M1 d g s b mdev W={w:.6e} L={l:.6e}
+M1 d g s b mdev W={w:.6e} L={l:.6e} AD={ad:.6e} AS={as_:.6e} PD={pd:.6e} PS={ps:.6e}
 Vd d 0 {vd:.6f}
 Vg g 0 {vg:.6f}
 Vs s 0 {vs:.6f}
 Vb b 0 {vb:.6f}
 
 .control
+set numdgt = 10
 op
 let id_ = -i(vd)
 let ig_ = -i(vg)
@@ -73,7 +79,6 @@ _NUM = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 
 
 def run_ngspice(netlist, timeout=60):
-    """Run ngspice in batch mode. Returns (id, ig, is, ib): current INTO each terminal."""
     with tempfile.NamedTemporaryFile("w", suffix=".cir", delete=False) as f:
         f.write(netlist)
         path = f.name
