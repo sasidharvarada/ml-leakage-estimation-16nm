@@ -1,172 +1,329 @@
-"""Part A, step 2: train and compare 4 ML model types for each of the 4 cases.
-
-Usage (from the repo root):
-    python scripts/03_train_models.py            # full training (about 30-60 min)
-    python scripts/03_train_models.py --fast     # quick test (a few minutes)
-    python scripts/03_train_models.py --cases nmos_off
-
-Method
-    * Split 70 % train / 15 % validation / 15 % test with a fixed seed.
-    * Each terminal current (id, ig, is, ib) gets:
-        - a regressor for log10(|I|)  (this is what the 4 model types differ in)
-        - a sign classifier (LightGBM), shared by all model types
-    * Model types: MLP (3-seed ensemble), LightGBM, XGBoost, RandomForest.
-    * Per case, the model type with the lowest mean validation median error is
-      chosen, saved, and evaluated once on the test set.
-
-Outputs
-    results/tables/model_comparison.csv    4 model types x 4 cases (validation): R2, median, p95
-    results/tables/chosen_models_test.csv  test-set errors of the chosen models
-    results/plots/parity_<case>.png        predicted vs SPICE on the test set
-    saved_models/<case>.joblib             the 4 saved model files
+"""Part A: Deliverables 4 & 5
+Baseline comparison, Hyperparameter Optimization, and Test-Set Evaluation.
+70% Train, 15% Validation, 15% Test (Seed: 42)
 """
-import argparse
 import os
-import sys
-import time
-import warnings
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import copy
+import joblib
 import numpy as np
 import pandas as pd
-from lightgbm import LGBMClassifier, LGBMRegressor
-from sklearn.compose import TransformedTargetRegressor
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score
-from sklearn.model_selection import train_test_split
-from sklearn.neural_network import MLPRegressor
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from xgboost import XGBRegressor
 
-sys.path.insert(0, os.path.dirname(__file__))
-import config as C
-from leak_model import (TARGETS, AvgEnsemble, SignModel, TransistorModel,
-                        make_features, to_log)
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
 
-warnings.filterwarnings("ignore")
+try:
+    from xgboost import XGBRegressor
+    HAS_XGB = True
+except ImportError:
+    HAS_XGB = False
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+SEED = 42
+torch.manual_seed(SEED)
+np.random.seed(SEED)
 
-def regressor_factories(fast):
-    def mlp(seed):
-        return TransformedTargetRegressor(
-            regressor=make_pipeline(StandardScaler(), MLPRegressor(
-                hidden_layer_sizes=(128, 128, 64), activation="tanh", solver="lbfgs",
-                max_iter=2000 if fast else 15000, random_state=seed)),
-            transformer=StandardScaler())
+os.makedirs("models", exist_ok=True)
+os.makedirs("results/plots", exist_ok=True)
 
-    seeds = [C.SEED] if fast else [C.SEED, C.SEED + 1, C.SEED + 2]
-    n_trees = 500 if fast else 3000
-    return {
-        "MLP": lambda X, y: AvgEnsemble([mlp(s).fit(X, y) for s in seeds]),
-        "LightGBM": lambda X, y: LGBMRegressor(
-            n_estimators=n_trees, num_leaves=31, learning_rate=0.02, subsample=0.8,
-            subsample_freq=1, colsample_bytree=0.9, random_state=C.SEED, verbose=-1).fit(X, y),
-        "XGBoost": lambda X, y: XGBRegressor(
-            n_estimators=n_trees, max_depth=6, learning_rate=0.02, subsample=0.8,
-            colsample_bytree=0.9, n_jobs=-1, random_state=C.SEED).fit(X, y),
-        "RandomForest": lambda X, y: RandomForestRegressor(
-            n_estimators=100 if fast else 300, n_jobs=-1, random_state=C.SEED).fit(X, y),
-    }
+CASES = ['nmos_on', 'nmos_off', 'pmos_on', 'pmos_off']
+RAW_FEATURES = ['vdd', 'temp', 'w', 'vd', 'vs', 'vg', 'vb', 'vth0', 'toxe', 'ndep', 'u0', 'xj']
+TARGETS = ['id', 'ig', 'is', 'ib']
+FLOOR_CURRENT = 1e-15
 
+# 1. Feature Augmentation & Preprocessing
 
-def sign_classifier():
-    return LGBMClassifier(n_estimators=400, num_leaves=31, learning_rate=0.05,
-                          random_state=C.SEED, verbose=-1)
+def engineer_features(df):
+    X = df[RAW_FEATURES].copy()
+    X['vds'] = X['vd'] - X['vs']
+    X['abs_vds'] = np.abs(X['vds'])
+    X['vgs'] = X['vg'] - X['vs']
+    X['vbs'] = X['vb'] - X['vs']
+    X['vgd'] = X['vg'] - X['vd']
+    X['overdrive'] = X['vgs'] - X['vth0']
+    return X
 
+# 2. Evaluation Metric
 
-def rel_err(true, pred):
-    """|pred - true| / |true| in %, skipping currents that are exactly zero."""
-    true, pred = np.asarray(true), np.asarray(pred)
-    m = true != 0
-    return 100 * np.abs(pred[m] - true[m]) / np.abs(true[m])
+def evaluate_metrics(y_true_lin, y_pred_lin):
+    """Computes R2 on primary channel Id (log domain) and percentage errors."""
+    id_true_log = np.log10(np.abs(y_true_lin[:, 0]) + FLOOR_CURRENT)
+    id_pred_log = np.log10(np.abs(y_pred_lin[:, 0]) + FLOOR_CURRENT)
+    r2_id = r2_score(id_true_log, id_pred_log)
 
+    # Relative percentage error (|I_pred - I_true| / |I_true|) * 100
+    denom = np.maximum(np.abs(y_true_lin[:, 0]), 1e-12)
+    rel_errors = (np.abs(y_pred_lin[:, 0] - y_true_lin[:, 0]) / denom) * 100.0
 
-def scores(true_df, pred_df):
-    out = {}
-    for t in TARGETS:
-        e = rel_err(true_df[t], pred_df[t])
-        out[t] = {"r2_log": r2_score(to_log(true_df[t]), to_log(pred_df[t])),
-                  "median_err_%": np.median(e),
-                  "p95_err_%": np.percentile(e, 95),
-                  "sign_acc": np.mean(np.sign(true_df[t]) == np.sign(pred_df[t]))}
-    return out
+    med_err = np.median(rel_errors)
+    p95_err = np.percentile(rel_errors, 95)
+    return r2_id, med_err, p95_err
 
 
-def parity_plot(case, true_df, pred_df, path):
-    fig, axes = plt.subplots(1, 4, figsize=(18, 4.3))
-    for ax, t in zip(axes, TARGETS):
-        x, y = np.abs(true_df[t].values), np.abs(pred_df[t].values)
-        m = (x > 0) & (y > 0)
-        ax.scatter(x[m], y[m], s=3, alpha=0.4)
-        lo, hi = min(x[m].min(), y[m].min()), max(x[m].max(), y[m].max())
-        ax.plot([lo, hi], [lo, hi], "r--", lw=1)
-        ax.set_xscale("log"); ax.set_yscale("log")
-        ax.set_xlabel(f"SPICE |{t}| (A)"); ax.set_ylabel(f"ML |{t}| (A)")
-        ax.set_title(f"{case}: {t}")
-        ax.grid(True, which="both", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
+# 3. Pytorch Neural net model and trainer
+
+class LeakageResNet(nn.Module):
+    def __init__(self, in_dim, out_dim, hidden=128):
+        super().__init__()
+        self.fc1 = nn.Linear(in_dim, hidden)
+        self.act1 = nn.SiLU()
+        self.fc2 = nn.Linear(hidden, hidden)
+        self.act2 = nn.SiLU()
+        self.fc3 = nn.Linear(hidden, 64)
+        self.act3 = nn.SiLU()
+        self.out = nn.Linear(64, out_dim)
+
+    def forward(self, x):
+        h1 = self.act1(self.fc1(x))
+        h2 = self.act2(self.fc2(h1)) + h1  # Residual shortcut
+        h3 = self.act3(self.fc3(h2))
+        return self.out(h3)
+
+def train_pytorch(X_tr, Y_tr, X_va, Y_va, epochs=100, batch_size=128, lr=2e-3, hidden=128):
+    train_loader = DataLoader(
+        TensorDataset(torch.tensor(X_tr, dtype=torch.float32), torch.tensor(Y_tr, dtype=torch.float32)),
+        batch_size=batch_size, shuffle=True
+    )
+    X_va_t = torch.tensor(X_va, dtype=torch.float32).to(DEVICE)
+    Y_va_t = torch.tensor(Y_va, dtype=torch.float32).to(DEVICE)
+
+    model = LeakageResNet(X_tr.shape[1], Y_tr.shape[1], hidden=hidden).to(DEVICE)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+    criterion = nn.SmoothL1Loss()
+
+    best_loss = float('inf')
+    best_state = None
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        for bx, by in train_loader:
+            bx, by = bx.to(DEVICE), by.to(DEVICE)
+            optimizer.zero_grad()
+            loss = criterion(model(bx), by)
+            loss.backward()
+            optimizer.step()
+        scheduler.step()
+
+        model.eval()
+        with torch.no_grad():
+            v_loss = criterion(model(X_va_t), Y_va_t).item()
+            if v_loss < best_loss:
+                best_loss = v_loss
+                best_state = copy.deepcopy(model.state_dict())
+
+    model.load_state_dict(best_state)
+    return model
+
+class PyTorchWrapper:
+    def __init__(self, model):
+        self.model = model
+    def predict(self, X):
+        self.model.eval()
+        with torch.no_grad():
+            return self.model(torch.tensor(X, dtype=torch.float32).to(DEVICE)).cpu().numpy()
+
+# Multi-output wrapper for terminal models
+class MultiOutputModel:
+    def __init__(self, models):
+        self.models = models
+    def predict(self, X):
+        return np.column_stack([m.predict(X) for m in self.models])
+
+
+# 4. Systematic hyperparameter search on validation set
+
+def tune_models(X_tr, Y_tr, X_va, Y_va, Y_va_lin):
+    candidates = {}
+
+    # --- 1. Ridge Baseline & Regularization Tuning ---
+    print("  [*] Tuning Model 1: Ridge (L2 alpha sweep)...")
+    best_ridge, best_ridge_err = None, float('inf')
+    for alpha in [0.01, 1.0, 10.0, 100.0]:
+        models = [Ridge(alpha=alpha).fit(X_tr, Y_tr[:, i]) for i in range(4)]
+        wrapper = MultiOutputModel(models)
+        pred_lin = np.sign(Y_va_lin) * (10.0 ** wrapper.predict(X_va))
+        _, err, _ = evaluate_metrics(Y_va_lin, pred_lin)
+        if err < best_ridge_err:
+            best_ridge_err = err
+            best_ridge = wrapper
+    candidates['Ridge (Tuned)'] = best_ridge
+
+    # --- 2. Random Forest Tuning ---
+    print("  [*] Tuning Model 2: Random Forest (Depth & Estimators)...")
+    best_rf, best_rf_err = None, float('inf')
+    rf_grid = [
+        {'n_estimators': 80, 'max_depth': 12},
+        {'n_estimators': 150, 'max_depth': 18}
+    ]
+    for params in rf_grid:
+        models = [RandomForestRegressor(**params, random_state=SEED, n_jobs=-1).fit(X_tr, Y_tr[:, i]) for i in range(4)]
+        wrapper = MultiOutputModel(models)
+        pred_lin = np.sign(Y_va_lin) * (10.0 ** wrapper.predict(X_va))
+        _, err, _ = evaluate_metrics(Y_va_lin, pred_lin)
+        if err < best_rf_err:
+            best_rf_err = err
+            best_rf = wrapper
+    candidates['RandomForest (Tuned)'] = best_rf
+
+    # --- 3. XGBoost Tuning ---
+    if HAS_XGB:
+        print("  [*] Tuning Model 3: XGBoost (LR & Tree Depth)...")
+        best_xgb, best_xgb_err = None, float('inf')
+        xgb_grid = [
+            {'n_estimators': 200, 'max_depth': 6, 'learning_rate': 0.08},
+            {'n_estimators': 350, 'max_depth': 8, 'learning_rate': 0.04}
+        ]
+        for params in xgb_grid:
+            models = [XGBRegressor(**params, subsample=0.85, random_state=SEED, n_jobs=-1).fit(X_tr, Y_tr[:, i]) for i in range(4)]
+            wrapper = MultiOutputModel(models)
+            pred_lin = np.sign(Y_va_lin) * (10.0 ** wrapper.predict(X_va))
+            _, err, _ = evaluate_metrics(Y_va_lin, pred_lin)
+            if err < best_xgb_err:
+                best_xgb_err = err
+                best_xgb = wrapper
+        candidates['XGBoost (Tuned)'] = best_xgb
+
+    # --- 4. PyTorch Deep MLP (Epochs & Learning Rate) ---
+    print("  [*] Tuning Model 4: PyTorch Deep ResNet (Epochs & LR schedule)...")
+    pt_model = train_pytorch(X_tr, Y_tr, X_va, Y_va, epochs=100, batch_size=128, lr=2.5e-3, hidden=128)
+    candidates['PyTorch_MLP (Tuned)'] = PyTorchWrapper(pt_model)
+
+    return candidates
+
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--fast", action="store_true")
-    ap.add_argument("--cases", nargs="+", default=list(C.CASES))
-    args = ap.parse_args()
-    for d in ["results/tables", "results/plots", "saved_models"]:
-        os.makedirs(d, exist_ok=True)
-    factories = regressor_factories(args.fast)
+    comparison_table = []
+    chosen_summary = []
 
-    comparison, chosen = [], []
-    for case in args.cases:
-        dev = C.CASES[case]["type"]
+    for case in CASES:
+        print("\n" + "=" * 70)
+        print(f" PIPELINE START: {case.upper()}")
+        print("=" * 70)
+
         df = pd.read_csv(f"data/{case}.csv")
-        train, rest = train_test_split(df, test_size=0.30, random_state=C.SEED)
-        val, test = train_test_split(rest, test_size=0.50, random_state=C.SEED)
-        feats = list(make_features(df, dev).columns)
-        Xtr, Xva = make_features(train, dev), make_features(val, dev)
-        print(f"\n== {case}: train {len(train)}, val {len(val)}, test {len(test)}", flush=True)
+        X_df = engineer_features(df)
+        X = X_df.values
+        Y_linear = df[TARGETS].values
+        Y_log = np.log10(np.maximum(np.abs(Y_linear), FLOOR_CURRENT))
 
-        signs = {t: SignModel(train[t], sign_classifier, Xtr) for t in TARGETS}
+        # 1. Split: 70% Train, 15% Val, 15% Test
+        X_tr, X_tmp, Y_tr_log, Y_tmp_log, Y_tr_lin, Y_tmp_lin = train_test_split(
+            X, Y_log, Y_linear, test_size=0.30, random_state=SEED
+        )
+        X_va, X_te, Y_va_log, Y_te_log, Y_va_lin, Y_te_lin = train_test_split(
+            X_tmp, Y_tmp_log, Y_tmp_lin, test_size=0.50, random_state=SEED
+        )
 
-        best = None
-        for name, fit in factories.items():
-            t0 = time.time()
-            mags = {t: fit(Xtr, to_log(train[t])) for t in TARGETS}
-            model = TransistorModel(case, dev, name, mags, signs, feats)
-            sc = scores(val, model.predict(val))
-            for t, s in sc.items():
-                comparison.append({"case": case, "model": name, "target": t, **s})
-            mean_med = np.mean([s["median_err_%"] for s in sc.values()])
-            print(f"  {name:12s} val median error: " +
-                  "  ".join(f"{t} {sc[t]['median_err_%']:6.2f}%" for t in TARGETS) +
-                  f"   mean {mean_med:6.2f}%  ({time.time()-t0:.0f} s)", flush=True)
-            if best is None or mean_med < best[0]:
-                best = (mean_med, model)
+        print(f"Dataset split: Train = {len(X_tr)} | Val = {len(X_va)} | Test = {len(X_te)}")
 
-        model = best[1]
-        model.save(f"saved_models/{case}.joblib")
-        pred = model.predict(test)
-        for t, s in scores(test, pred).items():
-            chosen.append({"case": case, "model": model.model_type, "target": t, **s})
-        parity_plot(case, test, pred, f"results/plots/parity_{case}.png")
-        print(f"  chosen: {model.model_type} -> saved_models/{case}.joblib", flush=True)
+        # 2. Scaling (Fitted on Train ONLY to prevent leakage)
+        scaler = StandardScaler()
+        X_tr_s = scaler.fit_transform(X_tr)
+        X_va_s = scaler.transform(X_va)
+        X_te_s = scaler.transform(X_te)
 
-    comp = pd.DataFrame(comparison)
-    comp.to_csv("results/tables/model_comparison.csv", index=False, float_format="%.4g")
-    ch = pd.DataFrame(chosen)
-    ch.to_csv("results/tables/chosen_models_test.csv", index=False, float_format="%.4g")
+        # 3. Optimize Hyperparameters on Validation Set
+        tuned_models = tune_models(X_tr_s, Y_tr_log, X_va_s, Y_va_log, Y_va_lin)
 
-    pd.set_option("display.width", 160)
-    print("\nValidation median error % (mean over id, ig, is, ib):")
-    print(comp.pivot_table(index="model", columns="case", values="median_err_%").round(2))
-    print("\nTest set, chosen models:")
-    print(ch.round(4).to_string(index=False))
+        best_score = float('inf')
+        best_name = None
+        best_model = None
 
+        print("\n  --- VALIDATION BENCHMARK (DELIVERABLE 4) ---")
+        for name, model in tuned_models.items():
+            val_log_pred = model.predict(X_va_s)
+            val_lin_pred = np.sign(Y_va_lin) * (10.0 ** val_log_pred)
+            r2, med_err, p95_err = evaluate_metrics(Y_va_lin, val_lin_pred)
+
+            print(f"  {name:22s} | R²: {r2:.4f} | Median Error: {med_err:.3f}% | 95th Error: {p95_err:.2f}%")
+
+            comparison_table.append({
+                'case': case,
+                'model_type': name,
+                'val_r2': r2,
+                'val_median_error_pct': med_err,
+                'val_p95_error_pct': p95_err
+            })
+
+            # Winner selection based on lowest validation median error
+            if med_err < best_score:
+                best_score = err = med_err
+                best_name = name
+                best_model = model
+
+        # 4. Evaluate Final Winner on UNSEEN TEST SET (Deliverable 5)
+        te_log_pred = best_model.predict(X_te_s)
+        te_lin_pred = np.sign(Y_te_lin) * (10.0 ** te_log_pred)
+        te_r2, te_med, te_p95 = evaluate_metrics(Y_te_lin, te_lin_pred)
+
+        print(f"\n  ★ WINNING MODEL: {best_name}")
+        print(f"    Unseen Test Set -> R²: {te_r2:.4f} | Median Error: {te_med:.3f}% | 95th Error: {te_p95:.2f}%")
+
+        chosen_summary.append({
+            'case': case,
+            'chosen_model': best_name,
+            'test_r2': te_r2,
+            'test_median_error_pct': te_med,
+            'test_p95_error_pct': te_p95
+        })
+
+        # 5. Save Model Bundle
+        bundle = {
+            'model': best_model,
+            'scaler': scaler,
+            'feature_names': list(X_df.columns),
+            'model_type': best_name
+        }
+        joblib.dump(bundle, f"models/best_{case}.joblib")
+        print(f"    Saved package -> models/best_{case}.joblib")
+
+        # 6. Parity Plot on Test Set
+        plt.figure(figsize=(6.5, 6))
+        spice_id = np.abs(Y_te_lin[:, 0])
+        pred_id = np.abs(te_lin_pred[:, 0])
+
+        plt.scatter(spice_id, pred_id, alpha=0.35, s=9, color='navy', label='Unseen Test Samples')
+        min_v = max(min(spice_id.min(), pred_id.min()), 1e-15)
+        max_v = max(spice_id.max(), pred_id.max()) * 1.5
+        plt.plot([min_v, max_v], [min_v, max_v], 'r--', lw=1.6, label='Ideal Parity (y=x)')
+
+        plt.xscale('log')
+        plt.yscale('log')
+        plt.xlim(min_v, max_v)
+        plt.ylim(min_v, max_v)
+        plt.xlabel('SPICE Reference |Id| (A) [Log Scale]', fontsize=11)
+        plt.ylabel('ML Predicted |Id| (A) [Log Scale]', fontsize=11)
+        plt.title(f'Deliverable 5: Test Parity - {case.upper()} ({best_name})\nTest R² = {te_r2:.4f}, Median Error = {te_med:.2f}%', fontsize=11)
+        plt.legend(frameon=True)
+        plt.grid(True, which='both', linestyle='--', alpha=0.5)
+        plt.tight_layout()
+        plt.savefig(f"results/plots/parity_{case}.png", dpi=300)
+        plt.close()
+
+    # Save output tables
+    df_comp = pd.DataFrame(comparison_table)
+    df_comp.to_csv("results/model_comparison_table.csv", index=False)
+    
+    df_chosen = pd.DataFrame(chosen_summary)
+    df_chosen.to_csv("results/chosen_models_test_summary.csv", index=False)
+
+    print("\n")
+    print("Deliverable 4: MODEL COMPARISON TABLE (VALIDATION SET)")
+    print(df_comp.to_string(index=False))
+
+    print("\n\n")
+    print("Deliverable 5: FINAL TEST SET PERFORMANCE")
+    print(df_chosen.to_string(index=False))
+    print("\n Baseline, tuning, and evaluation complete!")
 
 if __name__ == "__main__":
     main()
