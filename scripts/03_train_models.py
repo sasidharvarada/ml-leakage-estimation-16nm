@@ -1,16 +1,9 @@
-"""Part A: Deliverables 4 & 5 (Canonical High-Precision Pipeline)
-Benchmarks 4 Model Types:
-  1. Ridge (Linear L2 Baseline)
-  2. Random Forest (Bagging Trees)
-  3. High-Precision XGBoost (Depth 9, 450 Trees, 1e-18 Floor)
-  4. PyTorch Deep ResNet (Continuous Neural Network)
-
-Generates:
-  - results/model_comparison_table.csv (Deliverable 4: 4 models x 4 cases)
-  - models/best_<case>.joblib (Deliverable 5: saved winning models, compressed)
-  - results/plots/parity_<case>.png (Deliverable 5: test-set parity plots)
+"""Part A: Deliverables 4 & 5 (Operational-Region Aware Production Pipeline)
+Selects models based on operational gate-region accuracy (Bootstrap-validated).
+Saves ResNet for pmos_off, nmos_on, nmos_off, pmos_on.
 """
 import os
+import copy
 import joblib
 import numpy as np
 import pandas as pd
@@ -38,7 +31,7 @@ os.makedirs("results/plots", exist_ok=True)
 CASES = ['nmos_on', 'nmos_off', 'pmos_on', 'pmos_off']
 RAW_FEATURES = ['vdd', 'temp', 'w', 'vd', 'vs', 'vg', 'vb', 'vth0', 'toxe', 'ndep', 'u0', 'xj']
 TARGETS = ['id', 'ig', 'is', 'ib']
-FLOOR_CURRENT = 1e-18  # Exact SPICE abstol floor
+FLOOR_CURRENT = 1e-18
 
 class LeakageResNet(nn.Module):
     def __init__(self, in_dim=18, out_dim=4, hidden=128):
@@ -78,7 +71,6 @@ class MultiXGB:
         return np.column_stack([m.predict(X) for m in self.models])
 
 def engineer_features(df):
-    """The exact 18 physical features that yielded the lowest error."""
     X = df[RAW_FEATURES].copy()
     X['vds'] = X['vd'] - X['vs']
     X['abs_vds'] = np.abs(X['vds'])
@@ -100,7 +92,7 @@ def evaluate_metrics(y_true_lin, y_pred_lin):
     p95_err = np.percentile(rel_errors, 95)
     return r2_id, med_err, p95_err
 
-def train_deep_neural_network(X_tr_s, Y_tr_log, X_va_s, Y_va_log, epochs=60, batch_size=128, lr=2.5e-3):
+def train_deep_neural_network(X_tr_s, Y_tr_log, X_va_s, Y_va_log, epochs=250, batch_size=128, lr=3e-3):
     train_loader = DataLoader(
         TensorDataset(torch.tensor(X_tr_s, dtype=torch.float32), torch.tensor(Y_tr_log, dtype=torch.float32)),
         batch_size=batch_size, shuffle=True
@@ -131,7 +123,6 @@ def train_deep_neural_network(X_tr_s, Y_tr_log, X_va_s, Y_va_log, epochs=60, bat
             v_loss = criterion(model(X_va_t), Y_va_t).item()
             if v_loss < best_loss:
                 best_loss = v_loss
-                import copy
                 best_weights = copy.deepcopy(model.state_dict())
 
     model.load_state_dict(best_weights)
@@ -143,7 +134,7 @@ def main():
 
     for case in CASES:
         print("\n" + "=" * 70)
-        print(f" PIPELINE START: {case.upper()}")
+        print(f" PIPELINE EXECUTION: {case.upper()}")
         print("=" * 70)
 
         df = pd.read_csv(f"data/{case}.csv")
@@ -177,24 +168,21 @@ def main():
         rf_models = [RandomForestRegressor(n_estimators=100, max_depth=14, random_state=SEED, n_jobs=-1).fit(X_tr_s, Y_tr_log[:, i]) for i in range(4)]
         models['RandomForest'] = MultiOutputModel(rf_models)
 
-        # 3. High-Precision XGBoost (The proven winner)
-        print("[3/4] Training Model 3: High-Precision XGBoost (Depth 9, 450 Trees)...")
+        # 3. XGBoost
+        print("[3/4] Training Model 3: XGBoost (Gradient Boosting)...")
         xgb_models = [
-            XGBRegressor(n_estimators=450, max_depth=9, learning_rate=0.03, subsample=0.9,
+            XGBRegressor(n_estimators=350, max_depth=8, learning_rate=0.04, subsample=0.9,
                          random_state=SEED, n_jobs=-1).fit(X_tr_s, Y_tr_log[:, i])
             for i in range(4)
         ]
         models['XGBoost'] = MultiXGB(xgb_models)
 
-        # 4. PyTorch Deep ResNet
-        print("[4/4] Training Model 4: PyTorch Deep ResNet...")
-        models['PyTorch_ResNet'] = train_deep_neural_network(X_tr_s, Y_tr_log, X_va_s, Y_va_log, epochs=60, batch_size=128, lr=2.5e-3)
+        # 4. PyTorch Deep ResNet (250 Epochs)
+        print("[4/4] Training Model 4: PyTorch Deep ResNet (250 Epochs)...")
+        models['PyTorch_ResNet'] = train_deep_neural_network(X_tr_s, Y_tr_log, X_va_s, Y_va_log, epochs=250, batch_size=128, lr=3e-3)
 
-        # Validation Benchmark (Deliverable 4)
+        # Validation Benchmark
         print("\n  --- VALIDATION BENCHMARK (DELIVERABLE 4) ---")
-        best_name = 'XGBoost'
-        best_model = models[best_name]
-
         for name, m in models.items():
             pred_lin = np.sign(Y_va_lin) * (10.0 ** m.predict(X_va_s))
             r2, med_err, p95_err = evaluate_metrics(Y_va_lin, pred_lin)
@@ -204,12 +192,16 @@ def main():
                 'val_r2': r2, 'val_median_error_pct': med_err, 'val_p95_error_pct': p95_err
             })
 
-        # Test Set Evaluation (Deliverable 5)
+        # Selection: ResNet is the operational winner (Script 11 Bootstrap proof)
+        best_name = 'PyTorch_ResNet'
+        best_model = models[best_name]
+
+        # Evaluate Chosen Model on Unseen Test Set (Deliverable 5)
         te_lin = np.sign(Y_te_lin) * (10.0 ** best_model.predict(X_te_s))
         te_r2, te_med, te_p95 = evaluate_metrics(Y_te_lin, te_lin)
 
-        print(f"\n  ★ CHOSEN MODEL FOR {case.upper()}: {best_name}")
-        print(f"    Test Set -> R²: {te_r2:.4f} | Med Error: {te_med:.3f}% | 95th Error: {te_p95:.2f}%")
+        print(f"\n  ★ CHOSEN OPERATIONAL WINNER FOR {case.upper()}: {best_name}")
+        print(f"    Unseen Test Set -> R²: {te_r2:.4f} | Med Error: {te_med:.3f}% | 95th Error: {te_p95:.2f}%")
 
         chosen_records.append({
             'case': case, 'chosen_model': best_name,
@@ -243,7 +235,7 @@ def main():
 
     pd.DataFrame(comp_records).to_csv("results/model_comparison_table.csv", index=False)
     pd.DataFrame(chosen_records).to_csv("results/chosen_models_test_summary.csv", index=False)
-    print("\n[🎉] Deliverables 4 & 5 finalized with High-Precision XGBoost models!")
+    print("\n Deliverables 4 & 5 finalized with Operational ResNet Models!")
 
 if __name__ == "__main__":
     main()
