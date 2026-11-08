@@ -154,19 +154,27 @@ def gate_case_list():
     return list(PB.GATE_CASES)
 
 def _pin_loading_ig(evaluator, gate, inp, corner, node_v):
-    vdd, temp, npar = corner["vdd"], corner["temp"], corner["nmos"]
-    ig = lambda vd, vs: float(evaluator.predict_fet("nmos_on", vdd, temp, WN, vd, vs, vdd, 0.0, npar)[1])
+    vdd, temp = corner["vdd"], corner["temp"]
+    npar, ppar = corner["nmos"], corner["pmos"]
+    ign = lambda vd, vs: float(evaluator.predict_fet("nmos_on", vdd, temp, WN, vd, vs, vdd, 0.0, npar)[1])
+    igp = lambda vd, vs: float(evaluator.predict_fet("pmos_off", vdd, temp, WP, vd, vs, vdd, vdd, ppar)[1])
     out = node_v.get("n_out", node_v.get("out", 0.0)) if gate in ("AND2", "OR2") else node_v.get("out", 0.0)
     la = lb = 0.0
     if gate == "INV":
-        la = ig(node_v.get("out", 0.0), 0.0) if inp[0] == "1" else 0.0
+        if inp[0] == "1":
+            la = ign(out, 0.0) + igp(out, vdd)
     elif gate in ("NAND2", "AND2"):
         x = node_v.get("x", 0.0)
-        la = ig(out, x) if inp[0] == "1" else 0.0
-        lb = ig(x, 0.0) if inp[1] == "1" else 0.0
+        if inp[0] == "1":
+            la = ign(out, x) + igp(out, vdd)
+        if inp[1] == "1":
+            lb = ign(x, 0.0) + igp(out, vdd)
     else:
-        la = ig(out, 0.0) if inp[0] == "1" else 0.0
-        lb = ig(out, 0.0) if inp[1] == "1" else 0.0
+        y = node_v.get("y", vdd)
+        if inp[0] == "1":
+            la = ign(out, 0.0) + igp(y, vdd)
+        if inp[1] == "1":
+            lb = ign(out, 0.0) + igp(out, y)
     return la, lb
 
 def _table_from_df(df):
