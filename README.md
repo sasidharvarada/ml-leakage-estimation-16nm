@@ -55,18 +55,21 @@ Detailed engineering analyses, circuit schematics, diagnostic data, and experime
 Prerequisites:
 ```bash
 sudo apt update && sudo apt install -y ngspice python3-venv python3-pip
+```
 
 Setting up Python virtual environment:
-Bash
+
+```bash
 
 python3 -m venv venv
 source venv/bin/activate
 pip install numpy pandas scikit-learn xgboost torch joblib matplotlib
-
-Complete Reproduction Sequence
+```
+#### Complete Reproduction Sequence
 
 To reproduce all results, tables, and figures from scratch with fixed seeds, run the scripts in order from the repository root:
-Bash
+
+```bash
 
 python3 scripts/01_generate_data.py
 python3 scripts/02_data_check.py
@@ -74,9 +77,9 @@ python3 scripts/03_train_models.py
 python3 scripts/04_simulate_gates.py
 rm -rf results/part_c/gate_ml_cache.csv results/part_c/gate_cases
 python3 scripts/05_test_circuit.py
-
+```
 To run the complete diagnostic and error-analysis suite:
-Bash
+```bash
 
 python3 scripts/06_diagnose_part_c.py
 python3 scripts/07_gate_breakdown.py
@@ -84,4 +87,4 @@ python3 scripts/08_component_audit.py
 python3 scripts/09_model_diagnostics.py
 python3 scripts/10_oracle_single_fet.py
 python3 scripts/11_gate_region_compare.py
-
+```
