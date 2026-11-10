@@ -1,7 +1,7 @@
 # ML-Driven PVT-Aware Leakage Estimation
 ## 16 nm Low-Power CMOS, 3-Bit Carry-Lookahead Adder (CLA)
 
-Digital VLSI Design Course Project. Single-transistor SPICE simulations are used to train machine learning models predicting all four terminal currents (Id, Ig, Is, Ib) under Process, Voltage, and Temperature (PVT) variation. These surrogate models are hierarchically composed to predict the static leakage of standard CMOS gates (INV, NAND2, NOR2, AND2, OR2) and a 42-gate 3-bit Carry-Lookahead Adder (CLA). Every prediction is verified against golden netlist simulations in ngspice.
+Single-transistor SPICE simulations are used to train machine learning models predicting all four terminal currents (Id, Ig, Is, Ib) under Process, Voltage, and Temperature (PVT) variation. These surrogate models are hierarchically composed to predict the static leakage of standard CMOS gates (INV, NAND2, NOR2, AND2, OR2) and a 42-gate 3-bit Carry-Lookahead Adder (CLA). Every prediction is verified against golden netlist simulations in ngspice.
 
 ### Project Specifications
 
@@ -38,6 +38,54 @@ Digital VLSI Design Course Project. Single-transistor SPICE simulations are used
 | 6. Gate Results Table | Median, bias, median error, and P95 error for all 18 cases | `results/gate_results_table.csv` |
 | 7. Gate Parity Plot | Log-log scatter plot of all 3,600 gate simulations | `results/plots/gate_parity_plot.png` |
 | 8. Circuit Results | Per-vector metrics, raw data, and circuit parity plots | `results/circuit_results_table.csv`, `results/part_c/circuit_raw.csv`, `results/plots/circuit_parity_plot.png`, `results/plots/circuit_parity_plot_loading.png` |
+| 9. Reproduction Scripts | Sequential execution pipeline with fixed seeds | `scripts/01_generate_data.py` through `scripts/05_test_circuit.py` |
+| 10. Written Report | Project documentation and error analysis | `report/final_report.pdf` (or `docs/`) |
+
+### Visual Results and Parity Plots
+
+#### 1. Full-Circuit 3-Bit CLA Parity Plots (Part C - Deliverable 8)
+
+The 3-bit CLA was simulated across all 128 input vectors at 200 random PVT corners (25,600 full-circuit SPICE runs). 
+
+The plain hierarchical sum (left) reflects the baseline specification method (ignoring wire loading), showing a 32.25% structural underprediction gap. The loading-aware model (right) accounts for receiver gate tunneling along internal interconnects, eliminating the systematic bias and bringing median error to 8.42% (90.20% mean accuracy).
+
+Plain Hierarchical Sum (Headline Baseline):
+![Circuit Parity Plot Plain](results/plots/circuit_parity_plot.png)
+
+Loading-Aware Model (Physics Improvement):
+![Circuit Parity Plot Loading](results/plots/circuit_parity_plot_loading.png)
+
+#### 2. Gate-Level Parity Plot (Part B - Deliverable 7)
+
+Evaluates all 18 gate cases across 200 random PVT corners (3,600 SPICE simulations). The scatter points form a continuous diagonal across 9 decades of dynamic range (10^-17 A to 10^-9 A).
+
+![Gate Parity Plot](results/plots/gate_parity_plot.png)
+
+#### 3. Physical Trend Verifications (Part A - Deliverable 3)
+
+Confirms that single-transistor data generation in ngspice accurately reproduced the physical laws of subthreshold conduction and direct dielectric tunneling prior to model training.
+
+OFF Current vs. Temperature:
+![OFF Current vs Temperature](results/plots/off_current_vs_temp.png)
+
+OFF Current vs. Threshold Voltage (vth0):
+![OFF Current vs vth0](results/plots/off_current_vs_vth0.png)
+
+Gate Tunneling Current vs. Oxide Thickness (toxe):
+![Gate Current vs toxe](results/plots/gate_current_vs_toxe.png) 
+
+### Repository Structure and Deliverables Map
+
+| Deliverable | Description | File Location |
+|---|---|---|
+| 1. Datasets | Four 10,000-row CSV files with PVT parameters and terminal currents | `data/nmos_on.csv`, `data/nmos_off.csv`, `data/pmos_on.csv`, `data/pmos_off.csv` |
+| 2. Example Netlists | Characterization decks, gate netlists, and full CLA netlist | `netlists/transistor/*.cir`, `netlists/gates/*.sp`, `netlists/circuit/cla3.sp` |
+| 3. Data Check | KCL validation table and physical trend verification plots | `results/kcl_check.csv`, `results/plots/off_current_vs_*.png`, `results/plots/gate_current_vs_toxe.png` |
+| 4. Model Comparison Table | Benchmark of 4 model families across all 4 cases | `results/model_comparison_table.csv`, `results/model_comparison_by_target.csv` |
+| 5. Chosen Models | Test-set performance summary, parity plots, and model files | `results/chosen_models_test_summary.csv`, `results/plots/parity_*.png`, `models/best_*.joblib` |
+| 6. Gate Results Table | Median, bias, median error, and P95 error for all 18 cases | `results/gate_results_table.csv` |
+| 7. Gate Parity Plot | Log-log scatter plot of all 3,600 gate simulations | `results/plots/gate_parity_plot.png` |
+| 8. Circuit Results | Per-vector metrics, raw data, and circuit parity plots | `results/circuit_results_table.csv`, `results/part_c/circuit_raw.csv`, `results/plots/circuit_parity_plot*.png` |
 | 9. Reproduction Scripts | Sequential execution pipeline with fixed seeds | `scripts/01_generate_data.py` through `scripts/05_test_circuit.py` |
 | 10. Written Report | Project documentation and error analysis | `report/final_report.pdf` (or `docs/`) |
 
