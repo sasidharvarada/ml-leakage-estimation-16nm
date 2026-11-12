@@ -1,0 +1,17 @@
+case,model,r2_log,median_err_pct,p95_err_pct
+nmos_off,LightGBM,0.9964,8.051,47.91
+nmos_off,MLP,0.9992,1.537,9.329
+nmos_off,RandomForest,0.9891,9.671,113
+nmos_off,XGBoost,0.996,7.87,49.21
+nmos_on,LightGBM,0.9514,13.08,60.33
+nmos_on,MLP,0.9054,0.7454,11.04
+nmos_on,RandomForest,0.9419,21.14,122.5
+nmos_on,XGBoost,0.9512,12.76,61.04
+pmos_off,LightGBM,0.8184,19.13,52.96
+pmos_off,MLP,0.6204,13.89,6.343e+06
+pmos_off,RandomForest,0.8148,9.541,64.06
+pmos_off,XGBoost,0.8205,18.07,52.03
+pmos_on,LightGBM,0.9385,12.49,59.9
+pmos_on,MLP,0.8876,0.9081,17.26
+pmos_on,RandomForest,0.9339,21.99,118.7
+pmos_on,XGBoost,0.9433,12.07,59.54

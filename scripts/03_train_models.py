@@ -1,241 +1,230 @@
-"""Part A: Deliverables 4 & 5 (Operational-Region Aware Production Pipeline)
-Selects models based on operational gate-region accuracy (Bootstrap-validated).
-Saves ResNet for pmos_off, nmos_on, nmos_off, pmos_on.
+"""Part A, step 2: train and compare 4 ML model types for each of the 4 cases.
+
+Usage (from the repo root):
+    python scripts/03_train_models.py            # full training
+    python scripts/03_train_models.py --fast     # quick test (a few minutes)
+    python scripts/03_train_models.py --cases nmos_off
+
+Method
+    * data/<case>.csv (10,000 uniform samples) is split 70 / 15 / 15 into
+      train / validation / test with a fixed seed. Validation and test are
+      ONLY ever these uniform samples, so the reported numbers are honest.
+    * The extra rail-focused samples in data/rail/<case>.csv (if present, made by
+      01b_generate_rail_data.py) are ADDED to the training set only.
+    * Each terminal current (id, ig, is, ib) gets
+        - a regressor for log10(|I|)   (this is what the 4 model types differ in)
+        - a sign classifier (LightGBM), shared by all model types
+      and is predicted as  I = sign * 10 ** log10|I|.
+    * Model types: MLP (seed ensemble; PyTorch on the GPU if available, otherwise
+      scikit-learn), LightGBM, XGBoost, RandomForest.
+    * Errors are |pred - true| / |true| on every sample (no current floor),
+      reported as median and 95th percentile, plus R2 of log10|I|.
+    * Per case and per current, the type with the lowest validation median error
+      is chosen; the 4 chosen regressors are saved together as one model file
+      per case and evaluated once on the test set. A second test score is also
+      reported on the held-out rail samples (operating points used in gates).
+
+Outputs
+    results/tables/model_comparison.csv    4 model types x 4 cases x 4 currents (validation)
+    results/tables/model_comparison_summary.csv   4 x 4 table (mean over the 4 currents)
+    results/tables/chosen_models_test.csv  test-set errors of the chosen models
+    results/plots/parity_<case>.png        predicted vs SPICE on the test set
+    saved_models/<case>.joblib             the 4 saved model files
 """
+import argparse
 import os
-import copy
-import joblib
+import sys
+import time
+import warnings
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import Ridge
+from lightgbm import LGBMClassifier, LGBMRegressor
+from sklearn.compose import TransformedTargetRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score
-
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPRegressor
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
-import torch
-import torch.nn as nn
-from torch.utils.data import TensorDataset, DataLoader
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-SEED = 42
-torch.manual_seed(SEED)
-np.random.seed(SEED)
+sys.path.insert(0, os.path.dirname(__file__))
+import config as C
+from leak_model import (TARGETS, AvgEnsemble, SignModel, TransistorModel,
+                        make_features, to_log)
 
-os.makedirs("models", exist_ok=True)
-os.makedirs("results/plots", exist_ok=True)
+warnings.filterwarnings("ignore")
+RAIL_HOLDOUT = 0.15      # share of rail rows kept aside for the extra test score
 
-CASES = ['nmos_on', 'nmos_off', 'pmos_on', 'pmos_off']
-RAW_FEATURES = ['vdd', 'temp', 'w', 'vd', 'vs', 'vg', 'vb', 'vth0', 'toxe', 'ndep', 'u0', 'xj']
-TARGETS = ['id', 'ig', 'is', 'ib']
-FLOOR_CURRENT = 1e-18
 
-class LeakageResNet(nn.Module):
-    def __init__(self, in_dim=18, out_dim=4, hidden=128):
-        super().__init__()
-        self.fc1 = nn.Linear(in_dim, hidden)
-        self.act1 = nn.SiLU()
-        self.fc2 = nn.Linear(hidden, hidden)
-        self.act2 = nn.SiLU()
-        self.fc3 = nn.Linear(hidden, 64)
-        self.act3 = nn.SiLU()
-        self.out = nn.Linear(64, out_dim)
+def regressor_factories(fast, n_seeds, mlp_kind):
+    def mlp(seed):
+        return TransformedTargetRegressor(
+            regressor=make_pipeline(StandardScaler(), MLPRegressor(
+                hidden_layer_sizes=(128, 128, 64), activation="tanh", solver="lbfgs",
+                max_iter=2000 if fast else 15000, random_state=seed)),
+            transformer=StandardScaler())
 
-    def forward(self, x):
-        h1 = self.act1(self.fc1(x))
-        h2 = self.act2(self.fc2(h1)) + h1
-        h3 = self.act3(self.fc3(h2))
-        return self.out(h3)
+    def tmlp(seed):
+        from torch_mlp import TorchMLPRegressor
+        return TorchMLPRegressor(adam_steps=1500 if fast else 3000,
+                                 lbfgs_iters=500 if fast else 20000, seed=seed)
 
-class PyTorchWrapper:
-    def __init__(self, model):
-        self.model = model
-    def predict(self, X):
-        self.model.eval()
-        with torch.no_grad():
-            return self.model(torch.tensor(X, dtype=torch.float32).to(DEVICE)).cpu().numpy()
+    seeds = [C.SEED + i for i in range(1 if fast else n_seeds)]
+    n_trees = 500 if fast else 3000
+    if mlp_kind == "torch":
+        mlp_entry = ("MLP", lambda X, y: AvgEnsemble([tmlp(s).fit(X, y) for s in seeds]))
+    else:
+        mlp_entry = ("MLP", lambda X, y: AvgEnsemble([mlp(s).fit(X, y) for s in seeds]))
+    return {
+        mlp_entry[0]: mlp_entry[1],
+        "LightGBM": lambda X, y: LGBMRegressor(
+            n_estimators=n_trees, num_leaves=31, learning_rate=0.02, subsample=0.8,
+            subsample_freq=1, colsample_bytree=0.9, random_state=C.SEED, verbose=-1).fit(X, y),
+        "XGBoost": lambda X, y: XGBRegressor(
+            n_estimators=n_trees, max_depth=6, learning_rate=0.02, subsample=0.8,
+            colsample_bytree=0.9, n_jobs=-1, random_state=C.SEED).fit(X, y),
+        "RandomForest": lambda X, y: RandomForestRegressor(
+            n_estimators=100 if fast else 300, n_jobs=-1, random_state=C.SEED).fit(X, y),
+    }
 
-class MultiOutputModel:
-    def __init__(self, models):
-        self.models = models
-    def predict(self, X):
-        return np.column_stack([m.predict(X) for m in self.models])
 
-class MultiXGB:
-    def __init__(self, models):
-        self.models = models
-    def predict(self, X):
-        return np.column_stack([m.predict(X) for m in self.models])
+def sign_classifier():
+    return LGBMClassifier(n_estimators=400, num_leaves=31, learning_rate=0.05,
+                          random_state=C.SEED, verbose=-1)
 
-def engineer_features(df):
-    X = df[RAW_FEATURES].copy()
-    X['vds'] = X['vd'] - X['vs']
-    X['abs_vds'] = np.abs(X['vds'])
-    X['vgs'] = X['vg'] - X['vs']
-    X['vbs'] = X['vb'] - X['vs']
-    X['vgd'] = X['vg'] - X['vd']
-    X['overdrive'] = X['vgs'] - X['vth0']
-    return X
 
-def evaluate_metrics(y_true_lin, y_pred_lin):
-    id_true_log = np.log10(np.abs(y_true_lin[:, 0]) + FLOOR_CURRENT)
-    id_pred_log = np.log10(np.abs(y_pred_lin[:, 0]) + FLOOR_CURRENT)
-    r2_id = r2_score(id_true_log, id_pred_log)
+def rel_err(true, pred):
+    """|pred - true| / |true| in %, skipping currents that are exactly zero."""
+    true, pred = np.asarray(true), np.asarray(pred)
+    m = true != 0
+    return 100 * np.abs(pred[m] - true[m]) / np.abs(true[m])
 
-    denom = np.maximum(np.abs(y_true_lin[:, 0]), 1e-12)
-    rel_errors = (np.abs(y_pred_lin[:, 0] - y_true_lin[:, 0]) / denom) * 100.0
 
-    med_err = np.median(rel_errors)
-    p95_err = np.percentile(rel_errors, 95)
-    return r2_id, med_err, p95_err
+def scores(true_df, pred_df):
+    out = {}
+    for t in TARGETS:
+        e = rel_err(true_df[t], pred_df[t])
+        out[t] = {"r2_log": r2_score(to_log(true_df[t]), to_log(pred_df[t])),
+                  "median_err_%": np.median(e),
+                  "p95_err_%": np.percentile(e, 95),
+                  "sign_acc": np.mean(np.sign(true_df[t]) == np.sign(pred_df[t]))}
+    return out
 
-def train_deep_neural_network(X_tr_s, Y_tr_log, X_va_s, Y_va_log, epochs=250, batch_size=128, lr=3e-3):
-    train_loader = DataLoader(
-        TensorDataset(torch.tensor(X_tr_s, dtype=torch.float32), torch.tensor(Y_tr_log, dtype=torch.float32)),
-        batch_size=batch_size, shuffle=True
-    )
-    X_va_t = torch.tensor(X_va_s, dtype=torch.float32).to(DEVICE)
-    Y_va_t = torch.tensor(Y_va_log, dtype=torch.float32).to(DEVICE)
 
-    model = LeakageResNet(X_tr_s.shape[1], 4, hidden=128).to(DEVICE)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
-    criterion = nn.SmoothL1Loss()
+def parity_plot(case, true_df, pred_df, path):
+    fig, axes = plt.subplots(1, 4, figsize=(18, 4.3))
+    for ax, t in zip(axes, TARGETS):
+        x, y = np.abs(true_df[t].values), np.abs(pred_df[t].values)
+        m = (x > 0) & (y > 0)
+        ax.scatter(x[m], y[m], s=3, alpha=0.4)
+        lo, hi = min(x[m].min(), y[m].min()), max(x[m].max(), y[m].max())
+        ax.plot([lo, hi], [lo, hi], "r--", lw=1)
+        ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_xlabel(f"SPICE |{t}| (A)"); ax.set_ylabel(f"ML |{t}| (A)")
+        ax.set_title(f"{case}: {t}")
+        ax.grid(True, which="both", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
 
-    best_loss = float('inf')
-    best_weights = None
-
-    for epoch in range(1, epochs + 1):
-        model.train()
-        for bx, by in train_loader:
-            bx, by = bx.to(DEVICE), by.to(DEVICE)
-            optimizer.zero_grad()
-            loss = criterion(model(bx), by)
-            loss.backward()
-            optimizer.step()
-        scheduler.step()
-
-        model.eval()
-        with torch.no_grad():
-            v_loss = criterion(model(X_va_t), Y_va_t).item()
-            if v_loss < best_loss:
-                best_loss = v_loss
-                best_weights = copy.deepcopy(model.state_dict())
-
-    model.load_state_dict(best_weights)
-    return PyTorchWrapper(model)
 
 def main():
-    comp_records = []
-    chosen_records = []
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--fast", action="store_true")
+    ap.add_argument("--seeds", type=int, default=None, help="MLP ensemble size (default: 1 for PyTorch, 3 for scikit-learn)")
+    ap.add_argument("--no-rail", action="store_true", help="ignore data/rail/ (uniform data only)")
+    ap.add_argument("--cases", nargs="+", default=list(C.CASES))
+    ap.add_argument("--mlp", choices=["auto", "torch", "sklearn"], default="auto",
+                    help="auto = PyTorch (GPU if available) when torch is installed, else scikit-learn")
+    args = ap.parse_args()
+    if args.mlp == "auto":
+        try:
+            import torch_mlp
+            args.mlp = "torch" if torch_mlp.TORCH_OK else "sklearn"
+        except ImportError:
+            args.mlp = "sklearn"
+    if args.mlp == "torch":
+        import torch_mlp
+        print(f"MLP backend: PyTorch on {torch_mlp.device()}")
+    else:
+        print("MLP backend: scikit-learn (CPU)")
+    for d in ["results/tables", "results/plots", "saved_models"]:
+        os.makedirs(d, exist_ok=True)
+    if args.seeds is None:
+        args.seeds = 1 if args.mlp == "torch" else 3
+    factories = regressor_factories(args.fast, args.seeds, args.mlp)
 
-    for case in CASES:
-        print("\n" + "=" * 70)
-        print(f" PIPELINE EXECUTION: {case.upper()}")
-        print("=" * 70)
-
+    comparison, chosen = [], []
+    for case in args.cases:
+        dev = C.CASES[case]["type"]
         df = pd.read_csv(f"data/{case}.csv")
-        X_df = engineer_features(df)
-        X = X_df.values
-        Y_linear = df[TARGETS].values
-        Y_log = np.log10(np.maximum(np.abs(Y_linear), FLOOR_CURRENT))
+        train, rest = train_test_split(df, test_size=0.30, random_state=C.SEED)
+        val, test = train_test_split(rest, test_size=0.50, random_state=C.SEED)
 
-        # 70% Train, 15% Val, 15% Test
-        X_tr, X_tmp, Y_tr_log, Y_tmp_log, Y_tr_lin, Y_tmp_lin = train_test_split(
-            X, Y_log, Y_linear, test_size=0.30, random_state=SEED
-        )
-        X_va, X_te, Y_va_log, Y_te_log, Y_va_lin, Y_te_lin = train_test_split(
-            X_tmp, Y_tmp_log, Y_tmp_lin, test_size=0.50, random_state=SEED
-        )
+        rail_test = None
+        rail_path = f"data/rail/{case}.csv"
+        if os.path.exists(rail_path) and not args.no_rail:
+            rail = pd.read_csv(rail_path)
+            rail_train, rail_test = train_test_split(rail, test_size=RAIL_HOLDOUT, random_state=C.SEED)
+            train = pd.concat([train, rail_train], ignore_index=True)
 
-        scaler = StandardScaler()
-        X_tr_s = scaler.fit_transform(X_tr)
-        X_va_s = scaler.transform(X_va)
-        X_te_s = scaler.transform(X_te)
+        feats = list(make_features(df, dev).columns)
+        Xtr = make_features(train, dev)
+        print(f"\n== {case}: train {len(train)} (incl. rail {len(train) - 7000 if rail_test is not None else 0}), "
+              f"val {len(val)}, test {len(test)}", flush=True)
 
-        models = {}
+        signs = {t: SignModel(train[t], sign_classifier, Xtr) for t in TARGETS}
+        bounds = {t: (float(to_log(train[t]).min()), float(to_log(train[t]).max())) for t in TARGETS}
 
-        # 1. Ridge Baseline
-        print("[1/4] Training Model 1: Ridge (L2 Linear)...")
-        r_models = [Ridge(alpha=10.0).fit(X_tr_s, Y_tr_log[:, i]) for i in range(4)]
-        models['Ridge'] = MultiOutputModel(r_models)
+        trained = {}                       # model type -> {target: regressor}
+        val_scores = {}                    # model type -> {target: scores}
+        for name, fit in factories.items():
+            t0 = time.time()
+            mags = {t: fit(Xtr, to_log(train[t])) for t in TARGETS}
+            sc = scores(val, TransistorModel(case, dev, name, mags, signs, feats, bounds).predict(val))
+            trained[name], val_scores[name] = mags, sc
+            for t, s_ in sc.items():
+                comparison.append({"case": case, "model": name, "target": t, **s_})
+            mean_med = np.mean([s_["median_err_%"] for s_ in sc.values()])
+            print(f"  {name:12s} val median error: " +
+                  "  ".join(f"{t} {sc[t]['median_err_%']:6.2f}%" for t in TARGETS) +
+                  f"   mean {mean_med:6.2f}%  ({time.time()-t0:.0f} s)", flush=True)
 
-        # 2. Random Forest
-        print("[2/4] Training Model 2: Random Forest (Bagging)...")
-        rf_models = [RandomForestRegressor(n_estimators=100, max_depth=14, random_state=SEED, n_jobs=-1).fit(X_tr_s, Y_tr_log[:, i]) for i in range(4)]
-        models['RandomForest'] = MultiOutputModel(rf_models)
+        # best model type for EACH current (lowest validation median error)
+        pick = {t: min(trained, key=lambda n: val_scores[n][t]["median_err_%"]) for t in TARGETS}
+        model = TransistorModel(case, dev, dict(pick), {t: trained[pick[t]][t] for t in TARGETS},
+                                signs, feats, bounds)
+        model.save(f"saved_models/{case}.joblib")
+        pred = model.predict(test)
+        for t, s_ in scores(test, pred).items():
+            chosen.append({"case": case, "model": pick[t], "test_set": "uniform", "target": t, **s_})
+        if rail_test is not None:
+            for t, s_ in scores(rail_test, model.predict(rail_test)).items():
+                chosen.append({"case": case, "model": pick[t], "test_set": "rail", "target": t, **s_})
+        print("  chosen: " + ", ".join(f"{t}={pick[t]}" for t in TARGETS) +
+              f" -> saved_models/{case}.joblib", flush=True)
+        parity_plot(case, test, pred, f"results/plots/parity_{case}.png")
 
-        # 3. XGBoost
-        print("[3/4] Training Model 3: XGBoost (Gradient Boosting)...")
-        xgb_models = [
-            XGBRegressor(n_estimators=350, max_depth=8, learning_rate=0.04, subsample=0.9,
-                         random_state=SEED, n_jobs=-1).fit(X_tr_s, Y_tr_log[:, i])
-            for i in range(4)
-        ]
-        models['XGBoost'] = MultiXGB(xgb_models)
+    comp = pd.DataFrame(comparison)
+    comp.to_csv("results/tables/model_comparison.csv", index=False, float_format="%.4g")
+    summ = comp.groupby(["case", "model"]).agg(
+        r2_log=("r2_log", "mean"), median_err_pct=("median_err_%", "mean"),
+        p95_err_pct=("p95_err_%", "mean")).reset_index()
+    summ.to_csv("results/tables/model_comparison_summary.csv", index=False, float_format="%.4g")
+    ch = pd.DataFrame(chosen)
+    ch.to_csv("results/tables/chosen_models_test.csv", index=False, float_format="%.4g")
 
-        # 4. PyTorch Deep ResNet (250 Epochs)
-        print("[4/4] Training Model 4: PyTorch Deep ResNet (250 Epochs)...")
-        models['PyTorch_ResNet'] = train_deep_neural_network(X_tr_s, Y_tr_log, X_va_s, Y_va_log, epochs=250, batch_size=128, lr=3e-3)
+    pd.set_option("display.width", 160)
+    print("\nValidation median error % (mean over id, ig, is, ib):")
+    print(comp.pivot_table(index="model", columns="case", values="median_err_%").round(2))
+    print("\nTest set, chosen models:")
+    print(ch.round(4).to_string(index=False))
 
-        # Validation Benchmark
-        print("\n  --- VALIDATION BENCHMARK (DELIVERABLE 4) ---")
-        for name, m in models.items():
-            pred_lin = np.sign(Y_va_lin) * (10.0 ** m.predict(X_va_s))
-            r2, med_err, p95_err = evaluate_metrics(Y_va_lin, pred_lin)
-            print(f"  {name:16s} | R²: {r2:.4f} | Med Error: {med_err:.3f}% | 95th Error: {p95_err:.2f}%")
-            comp_records.append({
-                'case': case, 'model_type': name,
-                'val_r2': r2, 'val_median_error_pct': med_err, 'val_p95_error_pct': p95_err
-            })
-
-        # Selection: ResNet is the operational winner (Script 11 Bootstrap proof)
-        best_name = 'PyTorch_ResNet'
-        best_model = models[best_name]
-
-        # Evaluate Chosen Model on Unseen Test Set (Deliverable 5)
-        te_lin = np.sign(Y_te_lin) * (10.0 ** best_model.predict(X_te_s))
-        te_r2, te_med, te_p95 = evaluate_metrics(Y_te_lin, te_lin)
-
-        print(f"\n  ★ CHOSEN OPERATIONAL WINNER FOR {case.upper()}: {best_name}")
-        print(f"    Unseen Test Set -> R²: {te_r2:.4f} | Med Error: {te_med:.3f}% | 95th Error: {te_p95:.2f}%")
-
-        chosen_records.append({
-            'case': case, 'chosen_model': best_name,
-            'test_r2': te_r2, 'test_median_error_pct': te_med, 'test_p95_error_pct': te_p95
-        })
-
-        # Save package with compression
-        bundle = {
-            'model': best_model, 'scaler': scaler,
-            'feature_names': list(X_df.columns), 'model_type': best_name
-        }
-        joblib.dump(bundle, f"models/best_{case}.joblib", compress=3)
-        print(f"    Saved package -> models/best_{case}.joblib")
-
-        # Parity Plot
-        plt.figure(figsize=(6.5, 6))
-        sp_id, pr_id = np.abs(Y_te_lin[:, 0]), np.abs(te_lin[:, 0])
-        plt.scatter(sp_id, pr_id, alpha=0.35, s=9, color='navy', label='Unseen Test Set')
-        min_v = max(min(sp_id.min(), pr_id.min()), 1e-15)
-        max_v = max(sp_id.max(), pr_id.max()) * 1.5
-        plt.plot([min_v, max_v], [min_v, max_v], 'r--', lw=1.6, label='Ideal Parity (y=x)')
-        plt.xscale('log'); plt.yscale('log')
-        plt.xlim(min_v, max_v); plt.ylim(min_v, max_v)
-        plt.xlabel('SPICE Reference |Id| (A) [Log Scale]')
-        plt.ylabel('ML Predicted |Id| (A) [Log Scale]')
-        plt.title(f'Deliverable 5: {case.upper()} ({best_name})\nTest R² = {te_r2:.4f}, Med Error = {te_med:.2f}%')
-        plt.legend(frameon=True); plt.grid(True, which='both', ls='--', alpha=0.5)
-        plt.tight_layout()
-        plt.savefig(f"results/plots/parity_{case}.png", dpi=300)
-        plt.close()
-
-    pd.DataFrame(comp_records).to_csv("results/model_comparison_table.csv", index=False)
-    pd.DataFrame(chosen_records).to_csv("results/chosen_models_test_summary.csv", index=False)
-    print("\n Deliverables 4 & 5 finalized with Operational ResNet Models!")
 
 if __name__ == "__main__":
     main()

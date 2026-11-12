@@ -1,0 +1,5 @@
+method,spice_median_A,ml_median_A,bias_A,bias_pct,median_error_pct,mean_error_pct,p95_error_pct,mean_accuracy_pct
+ML plain sum (project method),2.687e-08,1.7372e-08,-6.1193e-09,-31.114,31.114,32.088,60.506,67.912
+ML loading-aware,2.687e-08,2.6949e-08,1.1863e-10,0.59701,0.83874,0.98588,2.5435,99.014
+"SPICE gate sum (no ML), plain",2.687e-08,1.7346e-08,-6.2836e-09,-31.494,31.494,32.465,60.526,67.535
+"SPICE gate sum (no ML), loading-aware",2.687e-08,2.6872e-08,1.9404e-12,0.0081237,0.0081912,0.012639,0.039683,99.987
