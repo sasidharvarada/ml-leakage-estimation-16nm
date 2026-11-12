@@ -1,8 +1,13 @@
-numpy
-pandas
-scikit-learn
-xgboost
-lightgbm
-matplotlib
-joblib
-tqdm
+# Python packages used (exact versions from the environment that produced the results).
+# ngspice 42 is also needed:  sudo apt install ngspice
+# PyTorch: install the CUDA build your NVIDIA driver supports, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# (without torch the training falls back to the scikit-learn MLP on the CPU)
+numpy==2.5.4
+pandas==3.1.0
+scikit-learn==1.9.1
+xgboost==3.4.1
+lightgbm==4.7.0
+joblib==1.6.0
+matplotlib==3.11.2
+torch==2.11.0

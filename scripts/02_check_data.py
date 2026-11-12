@@ -1,7 +1,7 @@
 """Part A data check: Kirchhoff check per case + the 3 trend plots.
 
-Usage (from the repo root):  python scripts/02_data_check.py
-Output: results/kcl_check.csv and results/plots/*.png
+Usage (from the repo root):  python scripts/02_check_data.py
+Output: results/part_a/kcl_check.csv and results/part_a/plots/*.png
 """
 import os
 import sys
@@ -15,7 +15,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(__file__))
 import config as C
 
-os.makedirs("results/plots", exist_ok=True)
+os.makedirs("results/part_a/plots", exist_ok=True)
 data = {c: pd.read_csv(f"data/{c}.csv") for c in C.CASES if os.path.exists(f"data/{c}.csv")}
 
 # 1. Kirchhoff check: id + ig + is + ib should be ~0
@@ -29,7 +29,7 @@ for case, df in data.items():
                  "median_rel_error": rel.median(),
                  "max_rel_error": rel.max()})
 kcl = pd.DataFrame(rows)
-kcl.to_csv("results/kcl_check.csv", index=False)
+kcl.to_csv("results/part_a/kcl_check.csv", index=False)
 print("Kirchhoff check (sum of terminal currents):")
 print(kcl.to_string(index=False))
 
@@ -56,6 +56,6 @@ for fname, y, x, title, xlabel in plots:
     for ax, c in zip(axes[0], cases):
         trend(ax, data[c], x, y, f"{title} ({c})", xlabel)
     fig.tight_layout()
-    fig.savefig(f"results/plots/{fname}", dpi=150)
+    fig.savefig(f"results/part_a/plots/{fname}", dpi=150)
     plt.close(fig)
-    print("saved results/plots/" + fname)
+    print("saved results/part_a/plots/" + fname)

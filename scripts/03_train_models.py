@@ -25,10 +25,10 @@ Method
       reported on the held-out rail samples (operating points used in gates).
 
 Outputs
-    results/tables/model_comparison.csv    4 model types x 4 cases x 4 currents (validation)
-    results/tables/model_comparison_summary.csv   4 x 4 table (mean over the 4 currents)
-    results/tables/chosen_models_test.csv  test-set errors of the chosen models
-    results/plots/parity_<case>.png        predicted vs SPICE on the test set
+    results/part_a/model_comparison.csv    4 model types x 4 cases x 4 currents (validation)
+    results/part_a/model_comparison_summary.csv   4 x 4 table (mean over the 4 currents)
+    results/part_a/chosen_models_test.csv  test-set errors of the chosen models
+    results/part_a/plots/parity_<case>.png  predicted vs SPICE on the test set
     saved_models/<case>.joblib             the 4 saved model files
 """
 import argparse
@@ -153,7 +153,7 @@ def main():
         print(f"MLP backend: PyTorch on {torch_mlp.device()}")
     else:
         print("MLP backend: scikit-learn (CPU)")
-    for d in ["results/tables", "results/plots", "saved_models"]:
+    for d in ["results/part_a/plots", "saved_models"]:
         os.makedirs(d, exist_ok=True)
     if args.seeds is None:
         args.seeds = 1 if args.mlp == "torch" else 3
@@ -208,16 +208,16 @@ def main():
                 chosen.append({"case": case, "model": pick[t], "test_set": "rail", "target": t, **s_})
         print("  chosen: " + ", ".join(f"{t}={pick[t]}" for t in TARGETS) +
               f" -> saved_models/{case}.joblib", flush=True)
-        parity_plot(case, test, pred, f"results/plots/parity_{case}.png")
+        parity_plot(case, test, pred, f"results/part_a/plots/parity_{case}.png")
 
     comp = pd.DataFrame(comparison)
-    comp.to_csv("results/tables/model_comparison.csv", index=False, float_format="%.4g")
+    comp.to_csv("results/part_a/model_comparison.csv", index=False, float_format="%.4g")
     summ = comp.groupby(["case", "model"]).agg(
         r2_log=("r2_log", "mean"), median_err_pct=("median_err_%", "mean"),
         p95_err_pct=("p95_err_%", "mean")).reset_index()
-    summ.to_csv("results/tables/model_comparison_summary.csv", index=False, float_format="%.4g")
+    summ.to_csv("results/part_a/model_comparison_summary.csv", index=False, float_format="%.4g")
     ch = pd.DataFrame(chosen)
-    ch.to_csv("results/tables/chosen_models_test.csv", index=False, float_format="%.4g")
+    ch.to_csv("results/part_a/chosen_models_test.csv", index=False, float_format="%.4g")
 
     pd.set_option("display.width", 160)
     print("\nValidation median error % (mean over id, ig, is, ib):")

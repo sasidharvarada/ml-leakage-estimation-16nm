@@ -1,66 +1,46 @@
-# Part C: Test-Circuit Validation (3-Bit Carry-Lookahead Adder)
+# Part C: 3-bit carry-lookahead adder
 
-## 1. Architecture of the 3-Bit CLA
+## Circuit (`scripts/cla3.py`, netlist `netlists/circuit/cla3.sp`)
 
-The test circuit is a 3-bit Carry-Lookahead Adder built exclusively from the five Part B cells (42 logic gates, 204 transistors):
-* Inputs: a[2:0], b[2:0], cin (7 binary inputs = 128 input vectors)
-* Outputs: s[2:0], cout
-* Bitwise Propagate and Generate:
-  * P_i = A_i XOR B_i (each XOR built from 4 NAND2 gates)
-  * G_i = A_i AND B_i (AND2 gates)
-* Lookahead Carry Generator:
-  * C1 = G0 + P0.Cin (AND2, OR2)
-  * C2 = G1 + P1.G0 + P1.P0.Cin (AND2, OR2)
-  * C3 = G2 + P2.G1 + P2.P1.G0 + P2.P1.P0.Cin (AND2, OR2 tree, Cout = C3)
-* Sum Generation:
-  * S_i = P_i XOR C_i (each XOR built from 4 NAND2 gates)
+42 gates built only from Part B gate types: P_i = A_i xor B_i and G_i = A_i and B_i per bit,
+carry-lookahead C1 = G0 + P0 Cin, C2 = G1 + P1 G0 + P1 P0 Cin, C3 = Cout = G2 + P2 G1 + P2 P1 G0 + P2 P1 P0 Cin
+(AND2 / OR2 trees), and S_i = P_i xor C_i. Each XOR is four NAND2 gates (24 NAND2, 12 AND2, 6 OR2).
+Inputs a[2:0], b[2:0], cin: 128 vectors. Every SPICE run is also checked logically (outputs s0, s1, s2, cout against
+a + b + cin): 0 mismatches in 25,600 runs.
 
-## 2. Simulation Setup and Golden Reference
+## Method (`scripts/05_validate_circuit.py`)
 
-The complete transistor-level netlist (`netlists/circuit/cla3.sp`) was simulated in ngspice across all 128 input vectors at the same 200 random PVT corners used in Part B:
-* Total full-circuit SPICE runs: 128 vectors x 200 corners = 25,600 simulations.
-* Static supply leakage current was extracted via the operating point supply current: I_leak = -i(Vdd).
-* Logic functionality was validated for every run: zero logic mismatches across all 25,600 simulations.
+* SPICE: the full transistor-level CLA at the same 200 corners as Part B, all 128 vectors
+  (25,600 runs, cached in `results/part_c/spice_cache/`). Leakage = -i(Vdd).
+* ML, plain sum (the project method): for each vector the logic value of every gate input is found, and
+  the Part B gate leakages (from the transistor models, same corner) are summed.
+* ML, loading-aware sum: plain sum + the input-pin current of every gate input whose net is an internal
+  net driven HIGH. In the full circuit that tunnelling current flows from VDD through the driving gate's
+  pull-up, so it is part of the circuit leakage; in a stand-alone gate simulation it comes from the ideal
+  input source and is not part of the gate leakage. The pin currents are predicted by the same transistor
+  models (gate currents of the transistors on that input).
+* Check without ML: the same two sums built from the SPICE gate results.
 
-## 3. The 32.25% Structural Gap: Control Experiment
+## Results (Deliverable 8)
 
-To determine whether the error in Part C stemmed from machine learning surrogate error or from circuit-level interconnection physics, a pure SPICE control experiment was conducted (script 05):
-* Method: Sum the exact SPICE gate leakages from isolated runs across all 42 gates for each vector and corner, and compare directly against the full-circuit SPICE netlist. Zero machine learning was involved.
+`results/part_c/circuit_summary.csv`, per-vector table `results/part_c/circuit_results_table.csv`,
+raw data `results/part_c/circuit_raw.csv`, parity plots `results/part_c/circuit_parity_plot.png` (plain)
+and `results/part_c/circuit_parity_plot_loading.png` (loading-aware).
 
-Control Experiment Results:
-* SPICE Full-Circuit Median: 2.687e-08 A (26.87 nA)
-* SPICE Gate-Sum Median: 1.735e-08 A (17.35 nA)
-* Structural Gap Median Error: 32.25% (P95 Error: 61.83%, Bias: -6.37e-09 A)
+| Method | Bias (%) | Median err (%) | Mean err (%) | P95 err (%) | Mean accuracy (%) |
+|---|---|---|---|---|---|
+| ML plain sum (project method) | -31.11 | 31.11 | 32.09 | 60.51 | 67.91 |
+| ML loading-aware | 0.60 | 0.84 | 0.99 | 2.54 | 99.01 |
+| SPICE gate sum, plain (no ML) | -31.49 | 31.49 | 32.47 | 60.53 | 67.53 |
+| SPICE gate sum, loading-aware (no ML) | 0.008 | 0.008 | 0.013 | 0.040 | 99.99 |
 
-Conclusion:
-Summing isolated gates under-predicts the real circuit by 32.25% in pure SPICE. This discrepancy is structural: isolated gate simulations connect input pins to ideal voltage sources, so receiver gate tunneling is supplied externally. In a full circuit, the driving gate's PMOS pull-up must supply that tunneling current from the chip's VDD rail.
+## Interpretation
 
-## 4. Deliverable 8: Test-Circuit Results
-
-Two hierarchical models were evaluated:
-1. Plain Hierarchical Sum (Headline - Deliverable 8): Evaluates gate inputs at ideal logic levels (0 or VDD) and sums isolated gate models, ignoring inter-gate loading as specified in Section 5.
-2. Loading-Aware Model (Physical Improvement): Augments the plain sum with the gate tunneling current drawn by downstream NMOS-ON receiver pins driven by internal nets (_pin_loading_ig).
-
-Summary Metrics (25,600 full-circuit runs):
-
-| Metric | Full-Circuit SPICE | Plain Hierarchical Sum (Headline) | Loading-Aware Model (Improvement) |
-|---|---|---|---|
-| Median Leakage Current | 2.687e-08 A | 1.771e-08 A | 2.666e-08 A |
-| Median Bias | -- | -6.362e-09 A | -5.278e-11 A |
-| Median Relative Error | -- | 32.41% | 8.42% |
-| 95th-Percentile Error | -- | 62.41% | 21.62% |
-| Mean Relative Error | -- | 32.58% | 9.80% |
-| Mean Accuracy | -- | 67.42% | 90.20% |
-
-* Best Vector: Vector 0111111 (A=7, B=7, Cin=0) achieved 2.14% median error.
-* Worst Vector: Vector 0000000 (A=0, B=0, Cin=0) had 13.88% median error.
-
-### Part C Parity Plots
-
-#### Plain Hierarchical Sum (Headline Result)
-Demonstrates the systematic downward shift caused by ignoring fan-out gate tunneling.
-![Circuit Parity Plot Plain](../results/plots/circuit_parity_plot.png)
-
-#### Loading-Aware Model (Physics Improvement)
-Adding receiver gate tunneling eliminates the systematic bias, centering the scatter directly on y = x.
-![Circuit Parity Plot Loading](../results/plots/circuit_parity_plot_loading.png)
+* The plain sum under-predicts by about 31 %, and it does so equally with SPICE gate values, so this gap is
+  caused by the composition (loading between gates), not by the ML models. The project text anticipates
+  this ("ignores loading between gates, so expect the accuracy to be somewhat lower").
+* The gap is large in this technology because the gate oxide is very thin (about 1.2 nm): a HIGH gate input
+  draws a tunnelling current comparable to the gate's own leakage.
+* With the input-pin currents added, the composition is exact (99.99 % with SPICE values), and the ML
+  version reaches 99.01 % mean accuracy. The remaining 0.8 % median error is the error of the transistor
+  models.

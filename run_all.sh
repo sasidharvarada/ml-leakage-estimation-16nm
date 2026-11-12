@@ -31,23 +31,23 @@ python -c "import numpy, pandas, sklearn, lightgbm, xgboost, matplotlib, joblib;
 python -c "import torch; print('torch', torch.__version__, '| GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'not available (CPU will be used)')" || echo "torch not installed: scikit-learn MLP (CPU) will be used"
 
 step "1. Part A datasets (uniform, 10,000 per case) - reuse if present"
-if [[ $(wc -l < data/nmos_on.csv) -lt 10001 ]]; then python scripts/01_generate_data.py; fi
+if [[ $(wc -l < data/nmos_on.csv) -lt 10001 ]]; then python scripts/01_generate_transistor_data.py; fi
 wc -l data/*.csv
 
 step "1b. Part A extra rail-focused training data ($RAIL_N per case)"
 if [[ $SKIP_DATA -eq 1 && -f data/rail/pmos_off.csv ]]; then echo "skipped (--skip-data)"; else python scripts/01b_generate_rail_data.py --n "$RAIL_N"; fi
 
 step "2. Part A data check"
-python scripts/02_data_check.py
+python scripts/02_check_data.py
 
 step "3. Part A model training (4 model types x 4 cases)"
 python scripts/03_train_models.py $FAST
 
 step "4. Part B gate validation (18 cases x 200 corners)"
-python scripts/04_simulate_gates.py
+python scripts/04_validate_gates.py
 
 step "5. Part C 3-bit CLA (200 corners x 128 vectors; SPICE cached)"
-python scripts/05_test_circuit.py
+python scripts/05_validate_circuit.py
 
 step "SUMMARY"
 python - <<'EOF'
@@ -55,14 +55,14 @@ import pandas as pd
 pd.set_option("display.width", 200)
 f = lambda v: f"{v:.4g}"
 print("\n--- Part A: validation median error % (mean over id, ig, is, ib)")
-c = pd.read_csv("results/tables/model_comparison.csv")
+c = pd.read_csv("results/part_a/model_comparison.csv")
 print(c.pivot_table(index="model", columns="case", values="median_err_%").round(2))
 print("\n--- Part A: chosen models, test sets")
-print(pd.read_csv("results/tables/chosen_models_test.csv").round(3).to_string(index=False))
+print(pd.read_csv("results/part_a/chosen_models_test.csv").round(3).to_string(index=False))
 print("\n--- Part B: gate results")
-print(pd.read_csv("results/gate_results_table.csv", dtype={"input": str}).to_string(index=False, float_format=f))
+print(pd.read_csv("results/part_b/gate_results_table.csv", dtype={"input": str}).to_string(index=False, float_format=f))
 print("\n--- Part C: circuit summary")
-print(pd.read_csv("results/circuit_summary.csv").to_string(index=False, float_format=f))
+print(pd.read_csv("results/part_c/circuit_summary.csv").to_string(index=False, float_format=f))
 EOF
 echo
 echo "Total time: $(( ($(date +%s) - START) / 60 )) min.  Log: $LOG"

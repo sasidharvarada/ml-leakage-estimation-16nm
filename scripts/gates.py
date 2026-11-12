@@ -1,6 +1,6 @@
 """Shared gate definitions, gate SPICE runs and the ML gate-leakage evaluator.
 
-Used by 04_simulate_gates.py (Part B) and 05_test_circuit.py (Part C).
+Used by 04_validate_gates.py (Part B) and 05_validate_circuit.py (Part C).
 
 Gate leakage definition (same in SPICE and ML): the current drawn from the VDD
 supply, I_vdd = -i(Vdd). Input pins are driven by ideal sources, so their

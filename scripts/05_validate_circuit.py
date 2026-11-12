@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Part C: test-circuit validation -- 3-bit carry-lookahead adder (Deliverable 8).
 
-Run from the repo root (after 04_simulate_gates.py):  python scripts/05_test_circuit.py
-Quick test:  python scripts/05_test_circuit.py --corners 10
+Run from the repo root (after 04_validate_gates.py):  python scripts/05_validate_circuit.py
+Quick test:  python scripts/05_validate_circuit.py --corners 10
 
 SPICE   The full 42-gate CLA netlist at the same 200 corners as Part B, for all
         128 input vectors (25,600 runs). Cached per corner in
@@ -20,10 +20,10 @@ Check   The same two sums built from the SPICE gate results instead of ML show
 
 Outputs
   results/part_c/circuit_raw.csv          every corner x vector
-  results/circuit_results_table.csv       per-vector metrics (plain and loading)
-  results/circuit_summary.csv             overall metrics
-  results/plots/circuit_parity_plot.png         plain sum
-  results/plots/circuit_parity_plot_loading.png loading-aware
+  results/part_c/circuit_results_table.csv  per-vector metrics (plain and loading)
+  results/part_c/circuit_summary.csv        overall metrics
+  results/part_c/circuit_parity_plot.png         plain sum
+  results/part_c/circuit_parity_plot_loading.png loading-aware
   netlists/circuit/cla3.sp                example netlist
 """
 import argparse
@@ -163,7 +163,6 @@ def main():
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
-    os.makedirs("results/plots", exist_ok=True)
     os.makedirs("netlists/circuit", exist_ok=True)
 
     corners = G.generate_corners(args.corners, args.seed)
@@ -226,7 +225,7 @@ def main():
         m2 = metrics(grp.spice_leak, grp.ml_leak_loading)
         recs.append({"vector": f"{vec:07b}", "a": vec & 7, "b": (vec >> 3) & 7, "cin": (vec >> 6) & 1,
                      **m1, **{k + "_loading": v for k, v in m2.items() if k != "spice_median_A"}})
-    pd.DataFrame(recs).to_csv("results/circuit_results_table.csv", index=False, float_format="%.5g")
+    pd.DataFrame(recs).to_csv(os.path.join(OUT, "circuit_results_table.csv"), index=False, float_format="%.5g")
 
     summary = pd.DataFrame([
         {"method": "ML plain sum (project method)", **metrics(df.spice_leak, df.ml_leak)},
@@ -234,7 +233,7 @@ def main():
         {"method": "SPICE gate sum (no ML), plain", **metrics(df.spice_leak, df.spice_gate_sum)},
         {"method": "SPICE gate sum (no ML), loading-aware", **metrics(df.spice_leak, df.spice_gate_sum_loading)},
     ])
-    summary.to_csv("results/circuit_summary.csv", index=False, float_format="%.5g")
+    summary.to_csv(os.path.join(OUT, "circuit_summary.csv"), index=False, float_format="%.5g")
     pd.set_option("display.width", 220)
     print("\nDELIVERABLE 8: CIRCUIT SUMMARY")
     print(summary.to_string(index=False, float_format=lambda v: f"{v:.4g}"))
@@ -244,8 +243,8 @@ def main():
         m = metrics(df.spice_leak, df[col])
         parity(df.spice_leak.values, df[col].values,
                f"3-bit CLA parity plot ({name})\nmedian error {m['median_error_pct']:.2f} %, "
-               f"mean accuracy {m['mean_accuracy_pct']:.2f} %", f"results/plots/{fname}")
-    print("\nSaved results/circuit_results_table.csv, results/circuit_summary.csv and the parity plots")
+               f"mean accuracy {m['mean_accuracy_pct']:.2f} %", os.path.join(OUT, fname))
+    print("\nSaved results/part_c/circuit_results_table.csv, circuit_summary.csv and the parity plots")
 
 
 if __name__ == "__main__":

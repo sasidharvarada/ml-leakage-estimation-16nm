@@ -1,9 +1,9 @@
 """Part A, step 1: generate the 4 transistor datasets with ngspice.
 
 Usage (from the repo root):
-    python scripts/01_generate_data.py               # all 4 cases, settings from config.py
-    python scripts/01_generate_data.py --n 200       # quick test with 200 samples per case
-    python scripts/01_generate_data.py --cases nmos_off
+    python scripts/01_generate_transistor_data.py               # all 4 cases, settings from config.py
+    python scripts/01_generate_transistor_data.py --n 200       # quick test with 200 samples per case
+    python scripts/01_generate_transistor_data.py --cases nmos_off
 
 Output: data/<case>.csv with the columns required by the project,
 and one example netlist per case in netlists/transistor/.

@@ -1,7 +1,7 @@
 """Part B: gate-level validation (Deliverables 6 and 7).
 
-Run from the repo root:   python scripts/04_simulate_gates.py
-Quick test:               python scripts/04_simulate_gates.py --corners 20
+Run from the repo root:   python scripts/04_validate_gates.py
+Quick test:               python scripts/04_validate_gates.py --corners 20
 
 Steps
   1. SPICE: every gate case (18) at 200 random corners (seed 123). Records the
@@ -15,8 +15,8 @@ Steps
 Outputs
   results/part_b/gate_spice.csv     SPICE leakage, pin currents, node voltages
   results/part_b/gate_all.csv       SPICE and ML values for all 3,600 runs
-  results/gate_results_table.csv    Deliverable 6 (18 rows)
-  results/plots/gate_parity_plot.png  Deliverable 7
+  results/part_b/gate_results_table.csv    Deliverable 6 (18 rows)
+  results/part_b/gate_parity_plot.png       Deliverable 7
   netlists/gates/<gate>.sp          example netlists (nominal corner)
 """
 import argparse
@@ -76,7 +76,6 @@ def main():
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
-    os.makedirs("results/plots", exist_ok=True)
     write_example_netlists()
 
     corners = G.generate_corners(args.corners, args.seed)
@@ -106,7 +105,7 @@ def main():
                            **metrics(allg[(allg.gate == g) & (allg.inp == i)].spice_leak,
                                      allg[(allg.gate == g) & (allg.inp == i)].ml_leak)}
                           for g, i in G.GATE_CASES])
-    table.to_csv("results/gate_results_table.csv", index=False, float_format="%.5g")
+    table.to_csv(os.path.join(OUT, "gate_results_table.csv"), index=False, float_format="%.5g")
     overall = metrics(allg.spice_leak, allg.ml_leak)
 
     pd.set_option("display.width", 200)
@@ -126,8 +125,8 @@ def main():
     plt.title(f"Gate parity plot (18 cases x {args.corners} corners)\n"
               f"median error {overall['median_error_pct']:.2f} %, mean accuracy {overall['mean_accuracy_pct']:.2f} %")
     plt.grid(True, which="both", ls="--", alpha=0.4); plt.legend()
-    plt.tight_layout(); plt.savefig("results/plots/gate_parity_plot.png", dpi=200); plt.close()
-    print("\nSaved results/gate_results_table.csv and results/plots/gate_parity_plot.png")
+    plt.tight_layout(); plt.savefig(os.path.join(OUT, "gate_parity_plot.png"), dpi=200); plt.close()
+    print("\nSaved results/part_b/gate_results_table.csv and results/part_b/gate_parity_plot.png")
 
 
 if __name__ == "__main__":

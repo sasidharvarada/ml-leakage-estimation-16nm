@@ -31,6 +31,8 @@ and of a 42-gate 3-bit carry-lookahead adder. Every prediction is checked agains
 | Part C: CLA, loading-aware | plain sum + gate-input currents of HIGH internal nets | **0.84 %** | **99.01 %** |
 | Part C check (no ML) | SPICE gate results, loading-aware sum | 0.008 % | 99.99 % |
 
+Mean accuracy = 100 % - mean of |ML - SPICE| / SPICE over all runs.
+
 The last row shows that the composition method itself is exact: built from SPICE gate results it
 reproduces the full-circuit SPICE leakage to 0.008 %. So the remaining 0.8 % in Part C is ML error.
 The plain sum misses about 31 % because, in the full circuit, the gate-tunnelling current drawn by gate
@@ -45,6 +47,11 @@ source (the project text notes that ignoring loading lowers accuracy).
 * Each current is predicted as sign x 10^(log10|I|): a regressor for log10|I| and a sign classifier.
 * 4 model types compared: MLP (PyTorch, Adam + L-BFGS, GPU), LightGBM, XGBoost, Random Forest.
   The best type is chosen per current on the validation set.
+
+![Part A parity plots](results/part_a/plots/parity_nmos_off.png)
+![Part A parity plots](results/part_a/plots/parity_pmos_off.png)
+![Part A parity plots](results/part_a/plots/parity_nmos_on.png)
+![Part A parity plots](results/part_a/plots/parity_pmos_on.png)
 
 Validation median error, % (mean over Id, Ig, Is, Ib):
 
@@ -100,7 +107,7 @@ NOR2 10 and NOR2 11 have very small leakage (two stacked OFF PMOS). NOR2 11 (abo
 the simulator's numerical noise floor: even single-transistor SPICE and gate SPICE differ by about 10 % there,
 so its percentage error is not meaningful. 9 of 3,600 gate SPICE runs did not converge and are excluded.
 
-![Gate Parity Plot](results/plots/gate_parity_plot.png)
+![Gate parity plot](results/part_b/gate_parity_plot.png)
 
 ### Part C: 3-bit CLA (Deliverable 8)
 
@@ -113,17 +120,29 @@ so its percentage error is not meaningful. 9 of 3,600 gate SPICE runs did not co
 | SPICE gate sum, plain (no ML) | 2.687e-08 | 1.735e-08 | -31.49 | 31.49 | 32.47 | 60.53 | 67.53 |
 | SPICE gate sum, loading-aware (no ML) | 2.687e-08 | 2.687e-08 | 0.008 | 0.008 | 0.013 | 0.040 | 99.99 |
 
-Plain sum:
-![Circuit Parity Plot Plain](results/plots/circuit_parity_plot.png)
+Loading-aware sum (main result):
+![Circuit parity plot, loading-aware](results/part_c/circuit_parity_plot_loading.png)
 
-Loading-aware:
-![Circuit Parity Plot Loading](results/plots/circuit_parity_plot_loading.png)
+Plain sum (project method, ignores loading):
+![Circuit parity plot, plain](results/part_c/circuit_parity_plot.png)
+
+**Why the plain sum is only about 68 %, and why that is expected.** The project text says the plain
+gate-sum ignores loading between gates and will be less accurate. The table shows that this gap is not
+an ML error: the same plain sum built from SPICE gate results (no ML at all) is also 67.5 %. In this
+16 nm LP technology the oxide is only about 1.2 nm thick, so a gate input that is driven HIGH draws a
+sizeable tunnelling current. In the full circuit that current is supplied from VDD by the driving gate
+(and so it is part of the circuit leakage), while in a stand-alone gate simulation it comes from the ideal
+input source and is not counted. Adding these input-pin currents, which are also predicted by the
+transistor models, gives the loading-aware sum: 99.01 % with ML and 99.99 % with SPICE values.
 
 ### Physical trend checks (Deliverable 3)
 
-![OFF Current vs Temperature](results/plots/off_current_vs_temp.png)
-![OFF Current vs vth0](results/plots/off_current_vs_vth0.png)
-![Gate Current vs toxe](results/plots/gate_current_vs_toxe.png)
+![OFF current vs temperature](results/part_a/plots/off_current_vs_temp.png)
+![OFF current vs vth0](results/part_a/plots/off_current_vs_vth0.png)
+![Gate current vs toxe](results/part_a/plots/gate_current_vs_toxe.png)
+
+Kirchhoff check (`results/part_a/kcl_check.csv`): the four terminal currents sum to zero with a median
+relative residual of about 1e-6 in all four cases.
 
 ### Deliverables map
 
@@ -131,18 +150,48 @@ Loading-aware:
 |---|---|---|
 | 1. Datasets | 4 x 10,000 uniform samples; extra rail-focused training samples | `data/<case>.csv`, `data/rail/<case>.csv` |
 | 2. Example netlists | transistor, gate and CLA netlists | `netlists/transistor/*.cir`, `netlists/gates/*.sp`, `netlists/circuit/cla3.sp` |
-| 3. Data check | Kirchhoff check and trend plots | `results/kcl_check.csv`, `results/plots/off_current_vs_*.png`, `results/plots/gate_current_vs_toxe.png` |
-| 4. Model comparison | 4 model types x 4 cases (R2, median, p95) | `results/tables/model_comparison.csv`, `results/tables/model_comparison_summary.csv` |
-| 5. Chosen models | test-set errors, parity plots, model files | `results/tables/chosen_models_test.csv`, `results/plots/parity_<case>.png`, `saved_models/<case>.joblib` |
-| 6. Gate results table | 18 cases | `results/gate_results_table.csv` (all runs: `results/part_b/gate_all.csv`) |
-| 7. Gate parity plot | 3,600 runs | `results/plots/gate_parity_plot.png` |
-| 8. Circuit results | per-vector table, summary, raw data, parity plots | `results/circuit_results_table.csv`, `results/circuit_summary.csv`, `results/part_c/circuit_raw.csv`, `results/plots/circuit_parity_plot*.png` |
-| 9. Scripts | pipeline with fixed seeds | `scripts/01_*.py` to `scripts/05_*.py`, `run_all.sh` |
+| 3. Data check | Kirchhoff check and trend plots | `results/part_a/kcl_check.csv`, `results/part_a/plots/off_current_vs_*.png`, `results/part_a/plots/gate_current_vs_toxe.png` |
+| 4. Model comparison | 4 model types x 4 cases (R2, median, p95) | `results/part_a/model_comparison.csv` (per current), `results/part_a/model_comparison_summary.csv` |
+| 5. Chosen models | test-set errors, parity plots, model files | `results/part_a/chosen_models_test.csv`, `results/part_a/plots/parity_<case>.png`, `saved_models/<case>.joblib` |
+| 6. Gate results table | 18 cases | `results/part_b/gate_results_table.csv` (all runs: `results/part_b/gate_all.csv`) |
+| 7. Gate parity plot | 3,600 runs | `results/part_b/gate_parity_plot.png` |
+| 8. Circuit results | per-vector table, summary, raw data, parity plots | `results/part_c/circuit_results_table.csv`, `results/part_c/circuit_summary.csv`, `results/part_c/circuit_raw.csv`, `results/part_c/circuit_parity_plot*.png` |
+| 9. Scripts | pipeline with fixed seeds | `scripts/` (see below), `run_all.sh` |
 | 10. Report | written report | `report/` |
 
-What changed from the earlier version (v2) and why: `docs/changes_v3.md`. Earlier scripts and results are
-kept in `scripts/archive/` and `results/old_v2/`. The files `docs/part_*.md` and
-`docs/diagnostics_and_experiments.md` describe the earlier v2 pipeline.
+### Repository layout
+
+```
+models/16nm_LP.pm            PTM 16 nm LP model card (assigned)
+data/<case>.csv              Part A datasets, 10,000 uniform samples each
+data/rail/<case>.csv         extra rail-focused training samples
+netlists/                    example netlists: transistor/, gates/, circuit/
+saved_models/<case>.joblib   the 4 trained transistor models
+results/part_a/              Kirchhoff check, model comparison, test results, plots/
+results/part_b/              gate SPICE (cached), gate results table, parity plot
+results/part_c/              circuit SPICE cache, per-vector table, summary, parity plots
+scripts/                     pipeline (01-05) and shared modules
+docs/                        detailed notes for each part and the method
+run_all.sh                   runs the whole pipeline and prints a summary
+```
+
+| Script | Purpose |
+|---|---|
+| `scripts/01_generate_transistor_data.py` | Part A datasets (4 cases x 10,000 SPICE runs) and transistor netlists |
+| `scripts/01b_generate_rail_data.py` | extra training samples with Vd, Vs near 0 and VDD |
+| `scripts/02_check_data.py` | Kirchhoff check and the three trend plots |
+| `scripts/03_train_models.py` | trains and compares 4 model types, saves the chosen models |
+| `scripts/04_validate_gates.py` | Part B: gate SPICE vs ML for 18 cases x 200 corners |
+| `scripts/05_validate_circuit.py` | Part C: 3-bit CLA SPICE vs gate-level composition |
+| `scripts/config.py` | all settings (model file, VDD, L, ranges, seeds, SPICE options) |
+| `scripts/spice_utils.py` | model-card editing, transistor netlist, ngspice runner |
+| `scripts/leak_model.py` | input features and the saved-model wrapper (sign x 10^log10\|I\|) |
+| `scripts/torch_mlp.py` | PyTorch MLP (GPU) used as the MLP model type |
+| `scripts/gates.py` | gate topologies, gate SPICE, and the KCL gate evaluator |
+| `scripts/cla3.py` | 3-bit CLA gate list and logic |
+
+Detailed notes: `docs/part_a_transistor_models.md`, `docs/part_b_gate_validation.md`,
+`docs/part_c_circuit_validation.md`, `docs/method_notes.md`.
 
 ### Setup
 
@@ -150,8 +199,8 @@ kept in `scripts/archive/` and `results/old_v2/`. The files `docs/part_*.md` and
 sudo apt update && sudo apt install -y ngspice python3-venv python3-pip
 python3 -m venv venv
 source venv/bin/activate
-pip install numpy pandas scikit-learn xgboost lightgbm joblib matplotlib
-# PyTorch for GPU training. Pick the CUDA build your NVIDIA driver supports, e.g. CUDA 12.8:
+pip install -r requirements.txt     # exact versions used for the results
+# PyTorch for GPU training: pick the CUDA build your NVIDIA driver supports, e.g. CUDA 12.8:
 pip install torch --index-url https://download.pytorch.org/whl/cu128
 ```
 
@@ -167,10 +216,10 @@ bash run_all.sh --skip-data    # keep the datasets, re-train and re-run Parts B 
 or step by step:
 
 ```bash
-python scripts/01_generate_data.py        # Part A datasets (10,000 per case)
-python scripts/01b_generate_rail_data.py  # extra rail-focused training data
-python scripts/02_data_check.py           # Kirchhoff check + trend plots
-python scripts/03_train_models.py         # 4 model types x 4 cases, saved_models/
-python scripts/04_simulate_gates.py       # Part B (gate SPICE cached in results/part_b/)
-python scripts/05_test_circuit.py         # Part C (circuit SPICE cached in results/part_c/spice_cache/)
+python scripts/01_generate_transistor_data.py   # Part A datasets (10,000 per case)
+python scripts/01b_generate_rail_data.py        # extra rail-focused training data
+python scripts/02_check_data.py                 # Kirchhoff check + trend plots
+python scripts/03_train_models.py               # 4 model types x 4 cases -> saved_models/
+python scripts/04_validate_gates.py             # Part B (gate SPICE cached in results/part_b/)
+python scripts/05_validate_circuit.py           # Part C (circuit SPICE cached in results/part_c/spice_cache/)
 ```
