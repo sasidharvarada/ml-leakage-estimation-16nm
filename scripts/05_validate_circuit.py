@@ -1,31 +1,3 @@
-#!/usr/bin/env python3
-"""Part C: test-circuit validation -- 3-bit carry-lookahead adder (Deliverable 8).
-
-Run from the repo root (after 04_validate_gates.py):  python scripts/05_validate_circuit.py
-Quick test:  python scripts/05_validate_circuit.py --corners 10
-
-SPICE   The full 42-gate CLA netlist at the same 200 corners as Part B, for all
-        128 input vectors (25,600 runs). Cached per corner in
-        results/part_c/spice_cache/ (delete the folder to re-run).
-ML      For each vector the logic value of every gate input is found, and the
-        gate leakages from Part B (results/part_b/gate_all.csv, which come from
-        the transistor models) are summed:
-          plain   = sum of gate leakages            (what the project asks for)
-          loading = plain + gate-input (pin) currents of every internal net that
-                    is HIGH. In the full circuit those pin currents are supplied
-                    by the driving gate from VDD; in a stand-alone gate they come
-                    from the ideal input source, so the plain sum misses them.
-Check   The same two sums built from the SPICE gate results instead of ML show
-        how much of the error comes from the composition and how much from ML.
-
-Outputs
-  results/part_c/circuit_raw.csv          every corner x vector
-  results/part_c/circuit_results_table.csv  per-vector metrics (plain and loading)
-  results/part_c/circuit_summary.csv        overall metrics
-  results/part_c/circuit_parity_plot.png         plain sum
-  results/part_c/circuit_parity_plot_loading.png loading-aware
-  netlists/circuit/cla3.sp                example netlist
-"""
 import argparse
 import os
 import re
@@ -44,12 +16,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cla3
 import config as C
 import gates as G
+from variant import out
 from spice_utils import set_params
 
 OUT = "results/part_c"
 
 
-# ----------------------------------------------------------------------------- SPICE netlist
+# SPICE netlist
 def gate_fets(g, t, ins, out):
     """Transistors of one CLA gate, with the gate's own node names."""
     m = {"a": ins[0], "b": ins[1] if len(ins) > 1 else None, "out": out,
@@ -116,9 +89,9 @@ def metrics(sp, ml):
             "p95_error_pct": np.percentile(rel, 95), "mean_accuracy_pct": 100.0 - np.mean(rel)}
 
 
-def gate_tables(n_corners):
+def gate_tables(n_corners, path):
     """(gate, pattern, corner) -> values from Part B (ML and SPICE)."""
-    df = pd.read_csv("results/part_b/gate_all.csv", dtype={"inp": str})
+    df = pd.read_csv(path, dtype={"inp": str})
     tab = {}
     for r in df.itertuples():
         tab[(r.gate, r.inp, int(r.corner))] = r
@@ -159,10 +132,14 @@ def parity(sp, ml, title, path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--corners", type=int, default=200)
-    ap.add_argument("--seed", type=int, default=123, help="must match Part B")
+    ap.add_argument("--seed", type=int, default=71, help="must match Part B")
     ap.add_argument("--workers", type=int, default=os.cpu_count())
+    ap.add_argument("--no-rail", action="store_true",
+                    help="read results/part_b/no_rail/gate_all.csv, write to results/part_c/no_rail/")
     args = ap.parse_args()
-    os.makedirs(OUT, exist_ok=True)
+    res_dir = out(OUT, args.no_rail)      # per-variant outputs; spice_cache stays shared in OUT
+    gate_csv = os.path.join(out("results/part_b", args.no_rail), "gate_all.csv")
+    os.makedirs(res_dir, exist_ok=True)
     os.makedirs("netlists/circuit", exist_ok=True)
 
     corners = G.generate_corners(args.corners, args.seed)
@@ -189,9 +166,9 @@ def main():
     spice = pd.concat(spice, ignore_index=True)
 
     # ---- gate tables from Part B
-    tab, missing = gate_tables(len(corners))
+    tab, missing = gate_tables(len(corners), gate_csv)
     fill = {}
-    allg = pd.read_csv("results/part_b/gate_all.csv", dtype={"inp": str})
+    allg = pd.read_csv(gate_csv, dtype={"inp": str})
     for (g, i), grp in allg.groupby(["gate", "inp"]):
         fill[(g, i)] = grp.median(numeric_only=True)   # used only if a Part B run failed
         fill[(g, i)] = type("R", (), dict(fill[(g, i)]))
@@ -215,7 +192,7 @@ def main():
     df = pd.DataFrame(rows)
     for col, src in (("err_pct", "ml_leak"), ("err_loading_pct", "ml_leak_loading")):
         df[col] = np.abs(df[src] - df.spice_leak) / df.spice_leak * 100.0
-    df.to_csv(os.path.join(OUT, "circuit_raw.csv"), index=False)
+    df.to_csv(os.path.join(res_dir, "circuit_raw.csv"), index=False)
     print(f"[*] SPICE failed runs: {failed};  SPICE logic mismatches (sanity check): {logic_bad}")
 
     # ---- tables
@@ -225,7 +202,7 @@ def main():
         m2 = metrics(grp.spice_leak, grp.ml_leak_loading)
         recs.append({"vector": f"{vec:07b}", "a": vec & 7, "b": (vec >> 3) & 7, "cin": (vec >> 6) & 1,
                      **m1, **{k + "_loading": v for k, v in m2.items() if k != "spice_median_A"}})
-    pd.DataFrame(recs).to_csv(os.path.join(OUT, "circuit_results_table.csv"), index=False, float_format="%.5g")
+    pd.DataFrame(recs).to_csv(os.path.join(res_dir, "circuit_results_table.csv"), index=False, float_format="%.5g")
 
     summary = pd.DataFrame([
         {"method": "ML plain sum (project method)", **metrics(df.spice_leak, df.ml_leak)},
@@ -233,7 +210,7 @@ def main():
         {"method": "SPICE gate sum (no ML), plain", **metrics(df.spice_leak, df.spice_gate_sum)},
         {"method": "SPICE gate sum (no ML), loading-aware", **metrics(df.spice_leak, df.spice_gate_sum_loading)},
     ])
-    summary.to_csv(os.path.join(OUT, "circuit_summary.csv"), index=False, float_format="%.5g")
+    summary.to_csv(os.path.join(res_dir, "circuit_summary.csv"), index=False, float_format="%.5g")
     pd.set_option("display.width", 220)
     print("\nDELIVERABLE 8: CIRCUIT SUMMARY")
     print(summary.to_string(index=False, float_format=lambda v: f"{v:.4g}"))

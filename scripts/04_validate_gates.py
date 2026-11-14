@@ -1,24 +1,3 @@
-"""Part B: gate-level validation (Deliverables 6 and 7).
-
-Run from the repo root:   python scripts/04_validate_gates.py
-Quick test:               python scripts/04_validate_gates.py --corners 20
-
-Steps
-  1. SPICE: every gate case (18) at 200 random corners (seed 123). Records the
-     supply leakage -i(Vdd), the input-pin currents and every internal node
-     voltage. Cached in results/part_b/gate_spice.csv (delete it to re-run).
-  2. ML: for the same cases and corners, the recorded node voltages give each
-     transistor's Vd, Vg, Vs, Vb; the 4 transistor models (saved_models/) give
-     Id, Ig, Is, Ib; gate leakage = KCL at the VDD side (see scripts/gates.py).
-  3. Compare: per case SPICE median, ML median, bias, median / mean / p95 error.
-
-Outputs
-  results/part_b/gate_spice.csv     SPICE leakage, pin currents, node voltages
-  results/part_b/gate_all.csv       SPICE and ML values for all 3,600 runs
-  results/part_b/gate_results_table.csv    Deliverable 6 (18 rows)
-  results/part_b/gate_parity_plot.png       Deliverable 7
-  netlists/gates/<gate>.sp          example netlists (nominal corner)
-"""
 import argparse
 import os
 import sys
@@ -32,6 +11,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gates as G
+from variant import out
 
 OUT = "results/part_b"
 
@@ -72,10 +52,13 @@ def write_example_netlists():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--corners", type=int, default=200)
-    ap.add_argument("--seed", type=int, default=123)
+    ap.add_argument("--seed", type=int, default=71)
     ap.add_argument("--workers", type=int, default=os.cpu_count())
+    ap.add_argument("--no-rail", action="store_true",
+                    help="use saved_models/no_rail/ and write to results/part_b/no_rail/")
     args = ap.parse_args()
-    os.makedirs(OUT, exist_ok=True)
+    res_dir = out(OUT, args.no_rail)      # per-variant outputs; gate_spice.csv stays shared in OUT
+    os.makedirs(res_dir, exist_ok=True)
     write_example_netlists()
 
     corners = G.generate_corners(args.corners, args.seed)
@@ -84,7 +67,7 @@ def main():
     bad = sp["spice_leak"].isna() | (sp["spice_leak"] <= 0)
     print(f"[*] SPICE runs failed / non-positive: {int(bad.sum())} of {len(sp)}")
 
-    ev = G.GateEvaluator()
+    ev = G.GateEvaluator(model_dir=out("saved_models", args.no_rail), use_rail=not args.no_rail)
     frames = []
     for gate, inp in G.GATE_CASES:
         part = sp[(sp.gate == gate) & (sp.inp == inp) & ~bad].copy()
@@ -99,13 +82,13 @@ def main():
         part["err_pct"] = np.abs(part.ml_leak - part.spice_leak) / part.spice_leak * 100.0
         frames.append(part)
     allg = pd.concat(frames, ignore_index=True)
-    allg.to_csv(os.path.join(OUT, "gate_all.csv"), index=False)
+    allg.to_csv(os.path.join(res_dir, "gate_all.csv"), index=False)
 
     table = pd.DataFrame([{"gate": g, "input": i,
                            **metrics(allg[(allg.gate == g) & (allg.inp == i)].spice_leak,
                                      allg[(allg.gate == g) & (allg.inp == i)].ml_leak)}
                           for g, i in G.GATE_CASES])
-    table.to_csv(os.path.join(OUT, "gate_results_table.csv"), index=False, float_format="%.5g")
+    table.to_csv(os.path.join(res_dir, "gate_results_table.csv"), index=False, float_format="%.5g")
     overall = metrics(allg.spice_leak, allg.ml_leak)
 
     pd.set_option("display.width", 200)
@@ -125,7 +108,7 @@ def main():
     plt.title(f"Gate parity plot (18 cases x {args.corners} corners)\n"
               f"median error {overall['median_error_pct']:.2f} %, mean accuracy {overall['mean_accuracy_pct']:.2f} %")
     plt.grid(True, which="both", ls="--", alpha=0.4); plt.legend()
-    plt.tight_layout(); plt.savefig(os.path.join(OUT, "gate_parity_plot.png"), dpi=200); plt.close()
+    plt.tight_layout(); plt.savefig(os.path.join(res_dir, "gate_parity_plot.png"), dpi=200); plt.close()
     print("\nSaved results/part_b/gate_results_table.csv and results/part_b/gate_parity_plot.png")
 
 

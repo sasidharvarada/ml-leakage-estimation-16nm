@@ -1,36 +1,3 @@
-"""Part A, step 2: train and compare 4 ML model types for each of the 4 cases.
-
-Usage (from the repo root):
-    python scripts/03_train_models.py            # full training
-    python scripts/03_train_models.py --fast     # quick test (a few minutes)
-    python scripts/03_train_models.py --cases nmos_off
-
-Method
-    * data/<case>.csv (10,000 uniform samples) is split 70 / 15 / 15 into
-      train / validation / test with a fixed seed. Validation and test are
-      ONLY ever these uniform samples, so the reported numbers are honest.
-    * The extra rail-focused samples in data/rail/<case>.csv (if present, made by
-      01b_generate_rail_data.py) are ADDED to the training set only.
-    * Each terminal current (id, ig, is, ib) gets
-        - a regressor for log10(|I|)   (this is what the 4 model types differ in)
-        - a sign classifier (LightGBM), shared by all model types
-      and is predicted as  I = sign * 10 ** log10|I|.
-    * Model types: MLP (seed ensemble; PyTorch on the GPU if available, otherwise
-      scikit-learn), LightGBM, XGBoost, RandomForest.
-    * Errors are |pred - true| / |true| on every sample (no current floor),
-      reported as median and 95th percentile, plus R2 of log10|I|.
-    * Per case and per current, the type with the lowest validation median error
-      is chosen; the 4 chosen regressors are saved together as one model file
-      per case and evaluated once on the test set. A second test score is also
-      reported on the held-out rail samples (operating points used in gates).
-
-Outputs
-    results/part_a/model_comparison.csv    4 model types x 4 cases x 4 currents (validation)
-    results/part_a/model_comparison_summary.csv   4 x 4 table (mean over the 4 currents)
-    results/part_a/chosen_models_test.csv  test-set errors of the chosen models
-    results/part_a/plots/parity_<case>.png  predicted vs SPICE on the test set
-    saved_models/<case>.joblib             the 4 saved model files
-"""
 import argparse
 import os
 import sys
@@ -51,6 +18,7 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
+from variant import out
 
 sys.path.insert(0, os.path.dirname(__file__))
 import config as C
@@ -153,7 +121,9 @@ def main():
         print(f"MLP backend: PyTorch on {torch_mlp.device()}")
     else:
         print("MLP backend: scikit-learn (CPU)")
-    for d in ["results/part_a/plots", "saved_models"]:
+    a_dir = out("results/part_a", args.no_rail)
+    m_dir = out("saved_models", args.no_rail)
+    for d in [os.path.join(a_dir, "plots"), m_dir]:
         os.makedirs(d, exist_ok=True)
     if args.seeds is None:
         args.seeds = 1 if args.mlp == "torch" else 3
@@ -199,7 +169,7 @@ def main():
         pick = {t: min(trained, key=lambda n: val_scores[n][t]["median_err_%"]) for t in TARGETS}
         model = TransistorModel(case, dev, dict(pick), {t: trained[pick[t]][t] for t in TARGETS},
                                 signs, feats, bounds)
-        model.save(f"saved_models/{case}.joblib")
+        model.save(os.path.join(m_dir, f"{case}.joblib"))
         pred = model.predict(test)
         for t, s_ in scores(test, pred).items():
             chosen.append({"case": case, "model": pick[t], "test_set": "uniform", "target": t, **s_})
@@ -207,17 +177,17 @@ def main():
             for t, s_ in scores(rail_test, model.predict(rail_test)).items():
                 chosen.append({"case": case, "model": pick[t], "test_set": "rail", "target": t, **s_})
         print("  chosen: " + ", ".join(f"{t}={pick[t]}" for t in TARGETS) +
-              f" -> saved_models/{case}.joblib", flush=True)
-        parity_plot(case, test, pred, f"results/part_a/plots/parity_{case}.png")
+              f" -> {m_dir}/{case}.joblib", flush=True)
+        parity_plot(case, test, pred, os.path.join(a_dir, "plots", f"parity_{case}.png"))
 
     comp = pd.DataFrame(comparison)
-    comp.to_csv("results/part_a/model_comparison.csv", index=False, float_format="%.4g")
+    comp.to_csv(os.path.join(a_dir, "model_comparison.csv"), index=False, float_format="%.4g")
     summ = comp.groupby(["case", "model"]).agg(
         r2_log=("r2_log", "mean"), median_err_pct=("median_err_%", "mean"),
         p95_err_pct=("p95_err_%", "mean")).reset_index()
-    summ.to_csv("results/part_a/model_comparison_summary.csv", index=False, float_format="%.4g")
+    summ.to_csv(os.path.join(a_dir, "model_comparison_summary.csv"), index=False, float_format="%.4g")
     ch = pd.DataFrame(chosen)
-    ch.to_csv("results/part_a/chosen_models_test.csv", index=False, float_format="%.4g")
+    ch.to_csv(os.path.join(a_dir, "chosen_models_test.csv"), index=False, float_format="%.4g")
 
     pd.set_option("display.width", 160)
     print("\nValidation median error % (mean over id, ig, is, ib):")

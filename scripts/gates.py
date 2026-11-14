@@ -1,24 +1,3 @@
-"""Shared gate definitions, gate SPICE runs and the ML gate-leakage evaluator.
-
-Used by 04_validate_gates.py (Part B) and 05_validate_circuit.py (Part C).
-
-Gate leakage definition (same in SPICE and ML): the current drawn from the VDD
-supply, I_vdd = -i(Vdd). Input pins are driven by ideal sources, so their
-currents are NOT part of the gate leakage (they are recorded separately and
-used for the loading correction in Part C).
-
-ML gate leakage = exact Kirchhoff current law (KCL) on the predicted terminal
-currents, written so that it never needs the channel current of an ON
-transistor (an ON transistor has Vds of a few microvolts and a huge
-conductance, so its channel current cannot be predicted from Vd and Vs):
-
-  N_up = the set of nodes connected to VDD through ON transistors.
-  I_vdd = sum over every transistor terminal attached to a node in N_up of the
-          current INTO that terminal.
-  For an ON transistor whose drain and source are both in N_up, Id + Is is
-  replaced by -(Ig + Ib)  (KCL on the transistor itself), so only its gate and
-  body currents are needed.
-"""
 import os
 import re
 import subprocess
@@ -92,8 +71,8 @@ def logic_value(gate, inp):
 
 
 # ----------------------------------------------------------------------------- corners
-def generate_corners(num_corners=200, seed=123):
-    """Same corner draw as the original Part B / Part C scripts (seed 123)."""
+def generate_corners(num_corners=200, seed=71):
+    """Same corner draw as the original Part B / Part C scripts (seed 71)."""
     rng = np.random.default_rng(seed)
     corners = []
     for _ in range(num_corners):
@@ -233,13 +212,14 @@ class GateCurrentBound:
 class GateEvaluator:
     """Predicts gate leakage and input-pin currents from the 4 transistor models."""
 
-    def __init__(self, model_dir="saved_models"):
+    def __init__(self, model_dir="saved_models", use_rail=True):
         from leak_model import TransistorModel
         self.models = {c: TransistorModel.load(os.path.join(model_dir, f"{c}.joblib"))
                        for c in ("nmos_on", "nmos_off", "pmos_on", "pmos_off")}
         self.ig_bound = {}
         for c in self.models:
-            parts = [pd.read_csv(f) for f in (f"data/{c}.csv", f"data/rail/{c}.csv") if os.path.exists(f)]
+            files = [f"data/{c}.csv"] + ([f"data/rail/{c}.csv"] if use_rail else [])
+            parts = [pd.read_csv(f) for f in files if os.path.exists(f)]
             self.ig_bound[c] = GateCurrentBound(pd.concat(parts, ignore_index=True), c[:4])
 
     def evaluate(self, gate, inp, rows):
