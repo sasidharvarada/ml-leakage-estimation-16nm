@@ -71,8 +71,10 @@ def logic_value(gate, inp):
 
 
 # ----------------------------------------------------------------------------- corners
-def generate_corners(num_corners=200, seed=71):
-    """Same corner draw as the original Part B / Part C scripts (seed 71)."""
+def generate_corners(num_corners=200, seed=123):
+    """Random PVT corners for Part B / Part C. Seed 123 is the official set; the cached SPICE
+    results in results/part_b/gate_spice.csv and results/part_c/spice_cache/ belong to it.
+    Corners are drawn one after another, so the first N corners are the same for any num_corners."""
     rng = np.random.default_rng(seed)
     corners = []
     for _ in range(num_corners):

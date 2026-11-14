@@ -1,3 +1,24 @@
+"""Part B: gate-level validation (Deliverables 6 and 7).
+
+Run from the repo root:   python scripts/04_validate_gates.py            (rail models)
+                          python scripts/04_validate_gates.py --no-rail  (models trained without data/rail)
+Fresh test corners:       python scripts/04_validate_gates.py --seed 2026 --corners 50 --outdir testing/results/fresh_gates
+
+Steps
+  1. SPICE: every gate case (18) at 200 random corners (seed 123). Records the
+     supply leakage -i(Vdd), the input-pin currents and every internal node
+     voltage. Cached in results/part_b/gate_spice.csv (official seed 123, 200 corners);
+     any other seed / corner count gets its own cache file in --outdir.
+  2. ML: for the same cases and corners, the recorded node voltages give each
+     transistor's Vd, Vg, Vs, Vb; the 4 transistor models give Id, Ig, Is, Ib;
+     gate leakage = KCL at the VDD side (see scripts/gates.py).
+  3. Compare: per case SPICE median, ML median, bias, median / mean / p95 error.
+
+Outputs (in results/part_b/, or results/part_b/no_rail/, or --outdir)
+  gate_all.csv            SPICE and ML values for every run
+  gate_results_table.csv  Deliverable 6 (18 rows)
+  gate_parity_plot.png    Deliverable 7
+"""
 import argparse
 import os
 import sys
@@ -25,12 +46,22 @@ def metrics(sp, ml):
             "p95_error_pct": np.percentile(rel, 95), "mean_accuracy_pct": 100.0 - np.mean(rel)}
 
 
+def cache_matches(df, corners):
+    """True if a cached SPICE table belongs to these corners (INV with input 0 has out = VDD)."""
+    inv = df[(df.gate == "INV") & (df.inp == "0")]
+    if inv.empty:
+        return False
+    vdd = np.array([corners[int(c)]["vdd"] for c in inv.corner])
+    return bool(np.nanmax(np.abs(inv.v_out.values - vdd)) < 1e-3)
+
+
 def run_spice(corners, workers, path):
     if os.path.exists(path):
         df = pd.read_csv(path, dtype={"inp": str})
-        if len(df) == 18 * len(corners):
+        if len(df) == 18 * len(corners) and cache_matches(df, corners):
             print(f"[*] using cached gate SPICE results: {path}")
             return df
+        print(f"[!] cache {path} does not match these corners -> re-running SPICE")
     tasks = [(g, i, ci, c) for g, i in G.GATE_CASES for ci, c in enumerate(corners)]
     print(f"[*] SPICE: {len(tasks)} gate simulations ...", flush=True)
     with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -52,17 +83,21 @@ def write_example_netlists():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--corners", type=int, default=200)
-    ap.add_argument("--seed", type=int, default=71)
+    ap.add_argument("--seed", type=int, default=123, help="corner seed (123 = official set)")
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--no-rail", action="store_true",
                     help="use saved_models/no_rail/ and write to results/part_b/no_rail/")
+    ap.add_argument("--outdir", default=None, help="output folder (default results/part_b[/no_rail])")
     args = ap.parse_args()
-    res_dir = out(OUT, args.no_rail)      # per-variant outputs; gate_spice.csv stays shared in OUT
+    res_dir = args.outdir or out(OUT, args.no_rail)
     os.makedirs(res_dir, exist_ok=True)
+    official = args.seed == 123 and args.corners == 200
+    cache_path = (os.path.join(OUT, "gate_spice.csv") if official
+                  else os.path.join(res_dir, f"gate_spice_seed{args.seed}_n{args.corners}.csv"))
     write_example_netlists()
 
     corners = G.generate_corners(args.corners, args.seed)
-    sp = run_spice(corners, args.workers, os.path.join(OUT, "gate_spice.csv"))
+    sp = run_spice(corners, args.workers, cache_path)
 
     bad = sp["spice_leak"].isna() | (sp["spice_leak"] <= 0)
     print(f"[*] SPICE runs failed / non-positive: {int(bad.sum())} of {len(sp)}")
@@ -109,7 +144,7 @@ def main():
               f"median error {overall['median_error_pct']:.2f} %, mean accuracy {overall['mean_accuracy_pct']:.2f} %")
     plt.grid(True, which="both", ls="--", alpha=0.4); plt.legend()
     plt.tight_layout(); plt.savefig(os.path.join(res_dir, "gate_parity_plot.png"), dpi=200); plt.close()
-    print("\nSaved results/part_b/gate_results_table.csv and results/part_b/gate_parity_plot.png")
+    print(f"\nSaved {res_dir}/gate_results_table.csv and {res_dir}/gate_parity_plot.png")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,28 @@
+#!/usr/bin/env python3
+"""Part C: test-circuit validation -- 3-bit carry-lookahead adder (Deliverable 8).
+
+Run from the repo root (after 04_validate_gates.py):
+    python scripts/05_validate_circuit.py              (rail models)
+    python scripts/05_validate_circuit.py --no-rail    (uses results/part_b/no_rail/)
+Fresh test corners (after the matching 04 run):
+    python scripts/05_validate_circuit.py --seed 2026 --corners 20 \
+        --gate-csv testing/results/fresh_gates/gate_all.csv --outdir testing/results/fresh_cla
+
+SPICE   The full 42-gate CLA netlist at the same corners as Part B, for all
+        128 input vectors. Cached per corner in results/part_c/spice_cache/
+        (official seed 123); other seeds are cached in <outdir>/spice_cache_seed<S>/.
+ML      For each vector the logic value of every gate input is found, and the
+        gate leakages from Part B (which come from the transistor models) are summed:
+          plain   = sum of gate leakages            (what the project asks for)
+          loading = plain + gate-input (pin) currents of every internal net that
+                    is HIGH (supplied from VDD by the driving gate in the full circuit).
+Check   The same two sums built from the SPICE gate results instead of ML show
+        how much of the error comes from the composition and how much from ML.
+
+Outputs (results/part_c/, results/part_c/no_rail/ or --outdir)
+  circuit_raw.csv, circuit_results_table.csv, circuit_summary.csv,
+  circuit_parity_plot.png (plain), circuit_parity_plot_loading.png
+"""
 import argparse
 import os
 import re
@@ -132,13 +157,15 @@ def parity(sp, ml, title, path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--corners", type=int, default=200)
-    ap.add_argument("--seed", type=int, default=71, help="must match Part B")
+    ap.add_argument("--seed", type=int, default=123, help="corner seed, must match Part B (123 = official)")
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--no-rail", action="store_true",
                     help="read results/part_b/no_rail/gate_all.csv, write to results/part_c/no_rail/")
+    ap.add_argument("--outdir", default=None, help="output folder (default results/part_c[/no_rail])")
+    ap.add_argument("--gate-csv", default=None, help="Part B gate_all.csv made with the same seed")
     args = ap.parse_args()
-    res_dir = out(OUT, args.no_rail)      # per-variant outputs; spice_cache stays shared in OUT
-    gate_csv = os.path.join(out("results/part_b", args.no_rail), "gate_all.csv")
+    res_dir = args.outdir or out(OUT, args.no_rail)
+    gate_csv = args.gate_csv or os.path.join(out("results/part_b", args.no_rail), "gate_all.csv")
     os.makedirs(res_dir, exist_ok=True)
     os.makedirs("netlists/circuit", exist_ok=True)
 
@@ -149,7 +176,8 @@ def main():
     print(f"PART C: 3-bit CLA ({len(cla3.GATES)} gates), {args.corners} corners x 128 vectors")
 
     # ---- SPICE (cached per corner)
-    cache = os.path.join(OUT, "spice_cache")
+    cache = (os.path.join(OUT, "spice_cache") if args.seed == 123
+             else os.path.join(res_dir, f"spice_cache_seed{args.seed}"))
     os.makedirs(cache, exist_ok=True)
     spice = []
     todo = [ci for ci in range(len(corners)) if not os.path.exists(os.path.join(cache, f"corner_{ci}_v128.csv"))]
@@ -169,6 +197,9 @@ def main():
     tab, missing = gate_tables(len(corners), gate_csv)
     fill = {}
     allg = pd.read_csv(gate_csv, dtype={"inp": str})
+    chk = allg[allg.corner < len(corners)].drop_duplicates("corner")
+    if np.nanmax(np.abs(chk.vdd.values - np.array([corners[int(c)]["vdd"] for c in chk.corner]))) > 1e-6:
+        raise SystemExit(f"[!] {gate_csv} was made with a different corner seed than --seed {args.seed}")
     for (g, i), grp in allg.groupby(["gate", "inp"]):
         fill[(g, i)] = grp.median(numeric_only=True)   # used only if a Part B run failed
         fill[(g, i)] = type("R", (), dict(fill[(g, i)]))
@@ -220,8 +251,8 @@ def main():
         m = metrics(df.spice_leak, df[col])
         parity(df.spice_leak.values, df[col].values,
                f"3-bit CLA parity plot ({name})\nmedian error {m['median_error_pct']:.2f} %, "
-               f"mean accuracy {m['mean_accuracy_pct']:.2f} %", os.path.join(OUT, fname))
-    print("\nSaved results/part_c/circuit_results_table.csv, circuit_summary.csv and the parity plots")
+               f"mean accuracy {m['mean_accuracy_pct']:.2f} %", os.path.join(res_dir, fname))
+    print(f"\nSaved {res_dir}/circuit_results_table.csv, circuit_summary.csv and the parity plots")
 
 
 if __name__ == "__main__":
