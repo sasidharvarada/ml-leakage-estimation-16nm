@@ -1,2 +1,3 @@
 *.sp linguist-detectable=false
 *.pm linguist-detectable=false
+*.cir linguist-detectable=false
