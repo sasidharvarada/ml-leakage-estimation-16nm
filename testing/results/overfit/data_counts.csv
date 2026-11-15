@@ -1,0 +1,5 @@
+case,dataset_rows,train,validation,test,spec_train/val/test,rail_rows_extra,train_total_rail_variant,train_total_no_rail_variant
+nmos_on,10000,7000,1500,1500,7000/1500/1500,10000,15500,7000
+nmos_off,10000,7000,1500,1500,7000/1500/1500,10000,15500,7000
+pmos_on,10000,7000,1500,1500,7000/1500/1500,10000,15500,7000
+pmos_off,10000,7000,1500,1500,7000/1500/1500,10000,15500,7000

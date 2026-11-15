@@ -1,0 +1,4 @@
+variant,level,median_err_%,p95_err_%,mean_acc_%,mean_acc_16_cases_%
+rail,gates (18 cases x 50 new corners),1.0306,4.1383,98.407,98.928
+rail,CLA plain sum (128 vectors x 20 new corners),37.046,58.008,64.956,
+rail,CLA loading-aware (128 vectors x 20 new corners),1.2811,2.5134,98.672,
