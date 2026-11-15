@@ -253,7 +253,7 @@ def write_example_netlist():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--corners", type=int, default=200)
-    ap.add_argument("--seed", type=int, default=123, help="must match Part B (default 123)")
+    ap.add_argument("--seed", type=int, default=7, help="must match Part B (default 7)")
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--vectors", type=int, default=128, help="use only the first N input vectors (testing)")
     ap.add_argument("--time-budget", type=int, default=0,

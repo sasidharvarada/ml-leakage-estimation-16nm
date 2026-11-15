@@ -73,7 +73,7 @@ GATE_CASES = [
 
 MODELS_TEXT = split_models("models/16nm_LP.pm")
 
-def generate_corners(num_corners=200, seed=123):
+def generate_corners(num_corners=200, seed=7):
     rng = np.random.default_rng(seed)
     corners = []
     for _ in range(num_corners):

@@ -21,7 +21,7 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-SEED = 42
+SEED = 71
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
