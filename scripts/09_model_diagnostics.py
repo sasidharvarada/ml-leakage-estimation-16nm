@@ -39,7 +39,7 @@ def load_part_b():
 
 load_part_b()
 
-SEED = 42  # must match the Part A training script
+SEED = 71 # must match the Part A training script
 CASES = ["nmos_on", "nmos_off", "pmos_on", "pmos_off"]
 RAW_FEATURES = ["vdd", "temp", "w", "vd", "vs", "vg", "vb", "vth0", "toxe", "ndep", "u0", "xj"]
 TARGETS = ["id", "ig", "is", "ib"]

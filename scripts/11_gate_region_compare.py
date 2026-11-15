@@ -2,7 +2,7 @@
 """Step 1 of the sampling check: is weak gate-region accuracy a model-choice problem or a coverage problem?
 
 Trains XGBoost and the ResNet on the Part A training split (same settings, split and seed as
-03_train_models_v2.py), then compares them on the VALIDATION split only, overall and in the bias
+03_train_models.py), then compares them on the VALIDATION split only, overall and in the bias
 regions that gates use. The test split is never touched. No new data is generated and nothing is
 saved except what you tee from stdout.
 
@@ -11,7 +11,16 @@ Regions (using the raw vd, vs, vdd of each sample):
             output-low corner (vs >= 0.8 VDD, vd <= 0.2 VDD); for nmos_off, vd >= 0.8 VDD, vs <= 0.2 VDD.
   region B: source and drain both at the source rail (Vds near 0), for example NAND2 10 for pmos_off.
 
-Run from the repo root (needs scripts/03_train_models_v2.py next to this file):
+Notes
+  - Uses the v1 training code (03_train_models.py): XGBoost 350 trees / depth 8 / lr 0.04 and
+    train_deep_neural_network (250 epochs, raw log10 targets). Split and seed (71) are imported from it.
+  - The ResNet is RETRAINED here, so it is not bit-identical to models/best_*.joblib (torch RNG state
+    differs from the full 03 run). Treat small gaps with caution.
+  - The metric here is deliberately not 03's evaluate_metrics (Id only, denominator floored at 1e-12 A):
+    errors are scored on all four targets with both sides clipped at the 1e-18 A floor, so tiny
+    currents in the gate region are not hidden.
+
+Run from the repo root (needs scripts/03_train_models.py next to this file):
     python3 scripts/11_gate_region_compare.py                 # pmos_off
     python3 scripts/11_gate_region_compare.py --case nmos_off # sanity check, ResNet should win here
     python3 scripts/11_gate_region_compare.py | tee results/gate_region_compare_pmos_off.txt
@@ -27,12 +36,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_spec = importlib.util.spec_from_file_location("v2", os.path.join(HERE, "03_train_models_v2.py"))
-v2 = importlib.util.module_from_spec(_spec)
-sys.modules["v2"] = v2
-_spec.loader.exec_module(v2)
+_spec = importlib.util.spec_from_file_location("tm", os.path.join(HERE, "03_train_models.py"))
+tm = importlib.util.module_from_spec(_spec)
+sys.modules["tm"] = tm
+_spec.loader.exec_module(tm)
 
-TARGETS = v2.TARGETS
+TARGETS = tm.TARGETS
 
 
 def region_masks(case, d):
@@ -51,9 +60,9 @@ def region_masks(case, d):
 
 
 def rel_err(true_lin, pred_log):
-    """Relative error in percent, both sides clipped at the 1e-18 A training floor (as in v2)."""
-    true_c = np.maximum(np.abs(true_lin), v2.FLOOR_CURRENT)
-    pred_c = np.maximum(10.0 ** np.clip(pred_log, -30.0, 3.0), v2.FLOOR_CURRENT)
+    """Relative error in percent, both sides clipped at the 1e-18 A training floor (not 03's Id-only metric)."""
+    true_c = np.maximum(np.abs(true_lin), tm.FLOOR_CURRENT)
+    pred_c = np.maximum(10.0 ** np.clip(pred_log, -30.0, 3.0), tm.FLOOR_CURRENT)
     return np.abs(pred_c - true_c) / true_c * 100.0
 
 
@@ -84,7 +93,7 @@ def bootstrap(rel_x, rel_r, mask, n_boot=2000, seed=0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--case", default="pmos_off", choices=v2.CASES)
+    ap.add_argument("--case", default="pmos_off", choices=tm.CASES)
     ap.add_argument("--epochs", type=int, default=250)
     args = ap.parse_args()
     case = args.case
@@ -94,16 +103,16 @@ def main():
     pd.set_option("display.float_format", "{:.4g}".format)
 
     df = pd.read_csv(f"data/{case}.csv")
-    X_df = v2.engineer_features(df)
+    X_df = tm.engineer_features(df)
     X = X_df.values
     Y_lin = df[TARGETS].values
-    Y_log = np.log10(np.maximum(np.abs(Y_lin), v2.FLOOR_CURRENT))
+    Y_log = np.log10(np.maximum(np.abs(Y_lin), tm.FLOOR_CURRENT))
     idx = np.arange(len(df))
 
     (X_tr, X_tmp, Y_tr_log, Y_tmp_log, Y_tr_lin, Y_tmp_lin, idx_tr, idx_tmp) = train_test_split(
-        X, Y_log, Y_lin, idx, test_size=0.30, random_state=v2.SEED)
+        X, Y_log, Y_lin, idx, test_size=0.30, random_state=tm.SEED)
     (X_va, _X_te, Y_va_log, _Y_te_log, Y_va_lin, _Y_te_lin, idx_va, _idx_te) = train_test_split(
-        X_tmp, Y_tmp_log, Y_tmp_lin, idx_tmp, test_size=0.50, random_state=v2.SEED)
+        X_tmp, Y_tmp_log, Y_tmp_lin, idx_tmp, test_size=0.50, random_state=tm.SEED)
 
     scaler = StandardScaler()
     X_tr_s = scaler.fit_transform(X_tr)
@@ -116,11 +125,12 @@ def main():
           f"region B = {int(tr_masks['region B (Vds near 0 at rail)'].sum())} of {len(idx_tr)}")
 
     print("Training XGBoost ...", flush=True)
-    xgb = v2.MultiXGB([
-        v2.XGBRegressor(n_estimators=450, max_depth=9, learning_rate=0.03, subsample=0.9,
-                        random_state=v2.SEED, n_jobs=-1).fit(X_tr_s, Y_tr_log[:, i]) for i in range(4)])
+    xgb = tm.MultiXGB([
+        tm.XGBRegressor(n_estimators=350, max_depth=8, learning_rate=0.04, subsample=0.9,
+                        random_state=tm.SEED, n_jobs=-1).fit(X_tr_s, Y_tr_log[:, i]) for i in range(4)])
     print(f"Training ResNet ({args.epochs} epochs) ...", flush=True)
-    res = v2.train_resnet(X_tr_s, Y_tr_log, X_va_s, Y_va_log, epochs=args.epochs)
+    tm.torch.manual_seed(tm.SEED)
+    res = tm.train_deep_neural_network(X_tr_s, Y_tr_log, X_va_s, Y_va_log, epochs=args.epochs)
 
     rel_x = rel_err(Y_va_lin, xgb.predict(X_va_s))
     rel_r = rel_err(Y_va_lin, res.predict(X_va_s))

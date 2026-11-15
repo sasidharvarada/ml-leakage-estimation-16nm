@@ -1,21 +1,7 @@
-#!/usr/bin/env python3
 """Coverage diagnostic: is gate-level error explained by gate operating points lying
 outside the region the transistor models were trained on?
 
-How it works
-  1. Loads the saved bundles via PB.GateMLEvaluator (the models Part B / Part C actually use).
-  2. Wraps each bundle's scaler so every feature vector a transistor model is queried with is
-     recorded. This is formula-agnostic: if 04 is patched (e.g. KCL states), whatever FETs it
-     queries are what gets measured.
-  3. Rebuilds each case's TRAIN split, checking the seed against the bundle's scaler (the
-     scaler was fit on the train split, so its mean_ identifies the seed).
-  4. For every recorded query: mean distance to its k nearest training rows (scaled feature
-     space), converted to a coverage percentile against held-out val+test rows. A held-out row
-     sits at ~50 on average; ~5% of in-distribution queries land above 95.
-  5. Per gate instance (gate x input x corner): worst-FET coverage percentile vs gate-level
-     error against SPICE.
-
-Run from the repo root, after 03 and 04 are in their final state:
+after 03 and 04 are in their final state:
     python3 scripts/12_coverage_diagnostic.py
     python3 scripts/12_coverage_diagnostic.py --corners 20     # quick test
 
@@ -45,12 +31,12 @@ OUT_DIR = "results/part_c"
 RAW_FEATURES = ["vdd", "temp", "w", "vd", "vs", "vg", "vb", "vth0", "toxe", "ndep", "u0", "xj"]
 BINS = [-1.0, 50.0, 90.0, 99.0, 100.01]
 BIN_LABELS = ["<50", "50-90", "90-99", ">=99"]
-VALID_MIN_A = 1e-13  # same "active regime" mask as 04 / 05
+VALID_MIN_A = 1e-13  
 
 
-# ---------------------------------------------------------------------------
+
 # Loading Part B (same trick as 05_test_circuit.py so the joblib bundles unpickle)
-# ---------------------------------------------------------------------------
+
 def load_part_b():
     spec = importlib.util.spec_from_file_location("part_b", os.path.join(HERE, "04_simulate_gates.py"))
     mod = importlib.util.module_from_spec(spec)
@@ -62,16 +48,12 @@ def load_part_b():
             setattr(main_mod, name, getattr(mod, name))
     return mod
 
-
-# Must run at import time, not inside main(): on Python 3.14 the pool workers start fresh and
-# re-import this file, and they can only unpickle PB.simulate_gate_spice if "part_b" is already
-# registered in sys.modules (05_test_circuit.py does the same).
 PB = load_part_b()
 
 
-# ---------------------------------------------------------------------------
+
 # Features (identical to 03_train_models.py / v2)
-# ---------------------------------------------------------------------------
+
 def engineer_features(df):
     X = df[RAW_FEATURES].copy()
     X["vds"] = X["vd"] - X["vs"]
@@ -83,9 +65,8 @@ def engineer_features(df):
     return X
 
 
-# ---------------------------------------------------------------------------
 # Recording wrapper around a fitted StandardScaler
-# ---------------------------------------------------------------------------
+
 class RecordingScaler:
     def __init__(self, scaler, case, log):
         self._scaler, self._case, self._log = scaler, case, log
@@ -99,9 +80,9 @@ class RecordingScaler:
         return getattr(self._scaler, name)
 
 
-# ---------------------------------------------------------------------------
+
 # Train split reproduction + coverage reference
-# ---------------------------------------------------------------------------
+
 def reproduce_split(df, scaler, seeds):
     """Return (seed, X_train, X_heldout) for the first seed whose train split matches the
     scaler the bundle was fit with. X_heldout = val + test rows."""
@@ -135,9 +116,9 @@ def coverage_percentile(ref_sorted, d):
     return float(np.searchsorted(ref_sorted, d, side="right")) / len(ref_sorted) * 100.0
 
 
-# ---------------------------------------------------------------------------
+
 # SPICE gate runs (cached; node voltages are needed to query the models)
-# ---------------------------------------------------------------------------
+
 def get_spice(PB, corners, seed, workers):
     path = os.path.join(OUT_DIR, f"coverage_spice_cache_seed{seed}_n{len(corners)}.csv")
     if os.path.exists(path):
@@ -160,10 +141,8 @@ def get_spice(PB, corners, seed, workers):
     df.to_csv(path, index=False)
     return df
 
-
-# ---------------------------------------------------------------------------
 # Analysis
-# ---------------------------------------------------------------------------
+
 def collect(evaluator, refs, spice_df, corners, k):
     inst_rows, query_rows = [], []
     for r in spice_df.itertuples():
@@ -277,7 +256,7 @@ def make_plot(valid, per_case, rho, path):
     plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
+
 def run(args, PB):
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs("results/plots", exist_ok=True)
