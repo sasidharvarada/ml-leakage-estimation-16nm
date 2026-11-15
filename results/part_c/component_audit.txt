@@ -1,0 +1,26 @@
+[*] INV 1: SPICE + ML audit over 200 corners ...
+[*] NAND2 11: SPICE + ML audit over 200 corners ...
+[*] NOR2 10: SPICE + ML audit over 200 corners ...
+[*] NOR2 11: SPICE + ML audit over 200 corners ...
+
+    case  spice_median_A       candidate  median_err_pct  p95_err_pct  signed_median_pct
+   INV 1       1.491e-11         formula           82.07         2178             -8.063
+   INV 1       1.491e-11         is_only           72.78        95.11             -72.02
+   INV 1       1.491e-11      is_plus_ib           72.45        94.85             -71.91
+   INV 1       1.491e-11 formula_plus_ib           81.42         2178             -8.061
+NAND2 11        2.98e-11         formula           82.56         2565             -2.166
+NAND2 11        2.98e-11         is_only           72.31        95.09             -71.81
+NAND2 11        2.98e-11      is_plus_ib           72.09        94.84             -71.32
+NAND2 11        2.98e-11 formula_plus_ib           82.42         2565             -2.094
+ NOR2 10       8.504e-13         formula           101.7         2657              101.7
+ NOR2 10       8.504e-13         is_only           77.46        92.02             -77.46
+ NOR2 10       8.504e-13      is_plus_ib           71.46        91.96             -70.77
+ NOR2 10       8.504e-13 formula_plus_ib           105.4         2657              105.4
+ NOR2 11       1.109e-14         formula           66.56        80.61             -66.32
+ NOR2 11       1.109e-14         is_only           84.65        95.12             -84.65
+ NOR2 11       1.109e-14      is_plus_ib           26.81        87.24              16.46
+ NOR2 11       1.109e-14 formula_plus_ib           35.37        68.68              29.95
+
+signed = median of (ML - SPICE) / SPICE * 100; negative means ML underpredicts.
+All candidates use magnitudes only (the models predict log10|I|), so a candidate that
+assumes the wrong current direction will overpredict.

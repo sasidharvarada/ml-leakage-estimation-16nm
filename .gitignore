@@ -2,4 +2,3 @@ dvd-env/
 __pycache__/
 *.raw
 *.log
-logs/

@@ -1,0 +1,17 @@
+case,model,target,r2_log,median_err_%,p95_err_%,sign_acc
+nmos_on,MLP,id,0.999,4.572,20.02,0.9973
+nmos_on,MLP,ig,0.712,7.063,44.96,0.97
+nmos_on,MLP,is,0.9989,4.773,23.13,0.9967
+nmos_on,MLP,ib,0.9996,1.641,6.941,1
+nmos_off,MLP,id,0.9869,0.4896,13.97,0.99
+nmos_off,MLP,ig,0.9989,1.254,8.229,1
+nmos_off,MLP,is,0.9984,3.645,25.48,0.986
+nmos_off,MLP,ib,0.9964,0.4633,5.196,1
+pmos_on,MLP,id,0.997,4.699,31.88,0.9853
+pmos_on,MLP,ig,0.9993,2.151,12.35,1
+pmos_on,MLP,is,0.9984,4.032,34.07,0.9933
+pmos_on,MLP,ib,0.9996,1.706,7.907,1
+pmos_off,MLP,id,0.9917,1.151,12.87,0.986
+pmos_off,MLP,ig,0.9998,0.9592,3.773,1
+pmos_off,MLP,is,0.9852,1.255,17.7,0.994
+pmos_off,MLP,ib,0.9979,0.6623,5.163,1
