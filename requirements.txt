@@ -2,7 +2,7 @@ numpy
 pandas
 scikit-learn
 xgboost
-lightgbm
+torch
+scipy
 matplotlib
 joblib
-tqdm
