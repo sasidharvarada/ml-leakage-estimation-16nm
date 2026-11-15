@@ -1,62 +1,93 @@
 # Part B: Gate-Level Leakage Validation
 
-## 1. Logic Gate Topologies and Netlists
+Results for Deliverables 6 and 7. Interpretation is in `part_b_analysis.md`. The diagnostics behind the findings are in `diagnostics_and_experiments.md`.
 
-Standard static CMOS implementations were built for the five benchmark cells in `netlists/gates/`:
-* Inverter (INV): 1 PMOS pull-up (WP = 64 nm), 1 NMOS pull-down (WN = 32 nm). Inputs: A = 0, 1.
-* NAND2: 2 parallel PMOS pull-ups, 2 series NMOS pull-downs. Internal node x between series NMOS. Inputs: AB = 00, 01, 10, 11.
-* NOR2: 2 series PMOS pull-ups, 2 parallel NMOS pull-downs. Internal node y between series PMOS. Inputs: AB = 00, 01, 10, 11.
-* AND2: NAND2 stage driving node n_out, followed by an inverter driving out. Complete integrated netlist (not separately simulated).
-* OR2: NOR2 stage driving node n_out, followed by an inverter driving out. Complete integrated netlist.
+| Step | Script | Output |
+|---|---|---|
+| 4 | `scripts/04_simulate_gates.py` | `results/gate_results_table.csv`, `results/plots/gate_parity_plot.png` |
 
-Total: 18 gate cases, evaluated across 200 random PVT corners (3,600 SPICE simulations).
+The corner seed is fixed to 123 inside `04_simulate_gates.py`.
 
-## 2. ML Prediction Methodology: Nodal KCL Formulation
+## 1. Gate topologies and netlists
 
-Section 3, Step 4 specifies that pre-recorded internal node voltages (x, y, n_out) and the output voltage from SPICE are used to determine the terminal voltages (Vd, Vg, Vs, Vb) for each transistor in the cell.
+Five static CMOS cells are built from the same transistors. Every NMOS is 32 nm wide (WN = 2 x Lmin) and every PMOS is 64 nm wide (WP = 4 x Lmin), with L = 16 nm. The diffusion rules are the same as in Part A: Ldiff = 2.5 x Lmin, AD = AS = W x Ldiff, PD = PS = 2 x (W + Ldiff).
 
-Static supply leakage drawn from the VDD pin was formulated based on device state:
+* Inverter (INV): 1 PMOS pull-up, 1 NMOS pull-down. Inputs A = 0, 1.
+* NAND2: 2 parallel PMOS pull-ups, 2 series NMOS pull-downs, internal node x between the NMOS. Inputs AB = 00, 01, 10, 11.
+* NOR2: 2 series PMOS pull-ups with internal node y between them, 2 parallel NMOS pull-downs. Inputs AB = 00, 01, 10, 11.
+* AND2: a NAND2 stage driving node n_out, followed by an inverter driving out. Simulated as one netlist.
+* OR2: a NOR2 stage driving node n_out, followed by an inverter driving out. Simulated as one netlist.
 
-### Output-HIGH States (Pull-Down Stack Blocking)
-When the gate output is HIGH, the pull-down NMOS network is turned OFF and blocks current to ground. The static current drawn from VDD consists of:
-1. Subthreshold leakage of the blocking NMOS network (Id).
-2. Quantum direct gate tunneling (Ig) of every PMOS whose gate is at 0 V (Vgs = -VDD).
-I_vdd = I_sub(blocking NMOS) + sum(I_gate(PMOS ON))
+The decks are generated inside `simulate_gate_spice` in `04_simulate_gates.py`, one per gate, input pattern and corner. Each uses `.nodeset` hints for the output and internal nodes, `gmin = abstol = 1e-18`, `reltol = 1e-6` and `itl1 = 400`, and solves a `.op` with a 10 s timeout. The supply leakage is I_leak = -i(Vdd). The output voltage and the internal node voltages (x, y, n_out) are recorded for the ML step.
 
-### Output-LOW States (Pull-Up Stack Blocking)
-When the gate output is LOW, the pull-up PMOS network is turned OFF. By Kirchhoff Current Law at the VDD pin, all current entering the cell from the supply rail must enter the Source or Bulk pins of the PMOS devices connected to VDD:
-I_vdd = sum(Is of PMOS with source on VDD) + sum(Ib of all PMOS)
+Total: 18 gate cases x 200 random PVT corners = 3,600 SPICE runs. The corners use seed 123 and are drawn from these ranges:
 
-As confirmed by single-device SPICE oracle testing (script 10), this KCL formulation matches full-cell SPICE leakage to within 0.0076%.
+| Quantity | Range |
+|---|---|
+| Supply voltage VDD | 0.90 V to 1.10 V |
+| Temperature T | -40 C to 125 C |
+| Process parameters (vth0, toxe, ndep, u0, xj) | plus/minus 10% around the nominal value, drawn independently for the NMOS and the PMOS |
 
-## 3. Deliverable 6: Gate Results Table
+## 2. ML prediction method
 
-Metrics evaluated across the 200 random PVT corners (filtered above the 1e-13 A noise floor):
+Following the project specification (Section 3, Step 4), the output and internal node voltages recorded from SPICE set the drain and source voltages of each transistor. The gate and body voltages follow from the input pattern. The Part A models predict all four terminal currents of each transistor as magnitudes, and `predict_gate_leakage` sums the terms below.
 
-| Gate | Input Pattern | SPICE Median (A) | ML Median (A) | Median Bias (A) | Median Error (%) | P95 Error (%) |
-|---|---|---|---|---|---|---|
-| INV | 0 | 2.251e-10 | 2.690e-10 | +2.235e-11 | 12.46 | 29.10 |
-| INV | 1 | 1.491e-11 | 2.847e-11 | +4.760e-12 | 62.61 | 2263.23 |
-| NAND2 | 00 | 4.088e-10 | 4.716e-10 | +3.457e-11 | 11.80 | 28.32 |
-| NAND2 | 01 | 2.251e-10 | 2.690e-10 | +2.235e-11 | 12.46 | 29.10 |
-| NAND2 | 10 | 2.106e-10 | 2.407e-10 | +1.766e-11 | 11.68 | 28.22 |
-| NAND2 | 11 | 2.980e-11 | 5.693e-11 | +9.519e-12 | 62.97 | 2462.82 |
-| NOR2 | 00 | 4.503e-10 | 5.379e-10 | +4.469e-11 | 12.46 | 29.10 |
-| NOR2 | 01 | 2.508e-10 | 2.952e-10 | +2.090e-11 | 13.75 | 31.08 |
-| NOR2 | 10 | 8.504e-13 | 4.362e-12 | +1.619e-12 | 117.16 | 2655.31 |
-| NOR2 | 11 | 1.109e-14 | 6.326e-14 | +2.004e-14 | 63.77 | 131.35 |
-| AND2 | 00 | 9.391e-10 | 9.461e-10 | +9.883e-12 | 7.29 | 22.32 |
-| AND2 | 01 | 6.751e-10 | 6.573e-10 | -4.407e-12 | 6.92 | 20.99 |
-| AND2 | 10 | 6.725e-10 | 6.513e-10 | -5.792e-12 | 7.44 | 21.01 |
-| AND2 | 11 | 3.154e-10 | 3.691e-10 | +3.196e-11 | 16.92 | 34.64 |
-| OR2 | 00 | 9.207e-10 | 9.541e-10 | +1.580e-11 | 7.26 | 22.39 |
-| OR2 | 01 | 4.871e-10 | 5.596e-10 | +4.315e-11 | 12.25 | 29.87 |
-| OR2 | 10 | 2.279e-10 | 2.719e-10 | +2.391e-11 | 13.14 | 29.86 |
-| OR2 | 11 | 2.265e-10 | 2.690e-10 | +2.225e-11 | 12.41 | 29.11 |
+| Gate, input | Output | Terms summed from the transistor models |
+|---|---|---|
+| INV 0 | high | NMOS OFF Id (drain out, source 0) + PMOS ON Ig |
+| INV 1 | low | PMOS OFF Id (drain out, source Vdd) |
+| NAND2 00 | high | NMOS OFF Id (drain out, source x) + 2 x PMOS ON Ig |
+| NAND2 01 | high | NMOS OFF Id (drain out, source x) + PMOS ON Ig |
+| NAND2 10 | high | NMOS OFF Id (drain x, source 0) + PMOS ON Ig |
+| NAND2 11 | low | 2 x PMOS OFF Id (drain out, source Vdd) |
+| NOR2 00 | high | 2 x NMOS OFF Id (drain out, source 0) + PMOS ON Ig (drain y, source Vdd) + PMOS ON Ig (drain out, source y) |
+| NOR2 01 | low | PMOS OFF Id (drain out, source y) + PMOS ON Ig (drain y, source Vdd) |
+| NOR2 10 | low | PMOS OFF Id (drain y, source Vdd) |
+| NOR2 11 | low | PMOS OFF Id (drain y, source Vdd) |
+| AND2 | | NAND2 term (output n_out) + INV term (input pattern set by n_out > Vdd/2) + interstage term |
+| OR2 | | NOR2 term (output n_out) + INV term (input pattern set by n_out > Vdd/2) + interstage term |
 
-* Part B Overall Median Error: 12.49% across all 3,600 simulations.
+The interstage term is the NMOS ON Ig of the inverter (drain out, source 0, gate n_out). It is added only when n_out is high.
 
-## 4. Deliverable 7: Gate Parity Plot
+**Output-low states.** In the final code the OFF PMOS contributes its drain current |Id|. Scripts 08 and 10 show that |Id| is not the quantity the supply delivers: it includes gate-edge tunneling that the input source supplies, not Vdd. The Kirchhoff formulation (Is of the PMOS whose source is on Vdd plus Ib of every PMOS) matches full-gate SPICE to 0.0076% (INV 1, NAND2 11) and to within 0.42% (all four states) when it is fed true SPICE currents. That fix was diagnosed after the Part B method was fixed and is not applied in the results below. See `part_b_analysis.md`, section 4.
 
-The gate-level parity plot demonstrates tight alignment along the ideal y = x line spanning from 10^-17 A to 10^-9 A.
+## 3. Deliverable 6: Gate results table
+
+Error statistics use only samples with SPICE leakage above 1e-13 A. The SPICE median, ML median and bias columns use every run with a non-zero SPICE leakage. The n column gives the number of runs above the 1e-13 A floor.
+
+| Gate | Input | n (>1e-13 A) | SPICE median (A) | ML median (A) | Median bias (A) | Median error (%) | P95 error (%) |
+|---|---|---|---|---|---|---|---|
+| INV | 0 | 200 | 2.251e-10 | 2.485e-10 | +1.023e-11 | 8.40 | 25.30 |
+| INV | 1 | 197 | 1.491e-11 | 2.037e-11 | +1.031e-12 | 52.71 | 1859.49 |
+| NAND2 | 00 | 200 | 4.088e-10 | 4.440e-10 | +1.427e-11 | 8.56 | 25.38 |
+| NAND2 | 01 | 200 | 2.251e-10 | 2.485e-10 | +1.023e-11 | 8.40 | 25.30 |
+| NAND2 | 10 | 200 | 2.106e-10 | 2.314e-10 | +8.107e-12 | 8.88 | 25.27 |
+| NAND2 | 11 | 200 | 2.980e-11 | 4.074e-11 | +2.062e-12 | 53.77 | 2127.79 |
+| NOR2 | 00 | 200 | 4.503e-10 | 4.970e-10 | +2.046e-11 | 8.39 | 25.30 |
+| NOR2 | 01 | 200 | 2.508e-10 | 2.638e-10 | +3.722e-12 | 9.55 | 26.42 |
+| NOR2 | 10 | 152 | 8.504e-13 | 4.787e-12 | +2.174e-12 | 144.15 | 2735.71 |
+| NOR2 | 11 | 58 | 1.109e-14 | 4.633e-14 | +1.085e-14 | 68.18 | 87.89 |
+| AND2 | 00 | 192 | 9.391e-10 | 9.307e-10 | -3.713e-12 | 6.62 | 22.76 |
+| AND2 | 01 | 199 | 6.751e-10 | 6.471e-10 | -1.074e-11 | 6.09 | 22.11 |
+| AND2 | 10 | 196 | 6.725e-10 | 6.479e-10 | -1.075e-11 | 5.84 | 24.80 |
+| AND2 | 11 | 200 | 3.154e-10 | 3.239e-10 | +4.591e-12 | 11.77 | 29.48 |
+| OR2 | 00 | 200 | 9.207e-10 | 9.443e-10 | -2.949e-12 | 6.25 | 17.46 |
+| OR2 | 01 | 200 | 4.871e-10 | 5.126e-10 | +8.344e-12 | 8.38 | 23.64 |
+| OR2 | 10 | 200 | 2.279e-10 | 2.532e-10 | +1.207e-11 | 9.04 | 24.98 |
+| OR2 | 11 | 200 | 2.265e-10 | 2.486e-10 | +9.726e-12 | 8.48 | 25.30 |
+
+* **Part B overall median error: 10.07%.** It is the median of the pooled relative errors of the 3,394 runs above 1e-13 A. It is not an average of the per-state medians.
+* 206 of the 3,600 runs are excluded. 13 are failed SPICE runs (all AND2, see section 5). 193 are below the 1e-13 A floor: 142 of them in NOR2 11, 48 in NOR2 10 and 3 in INV 1.
+* Excluding the four states with the highest error (INV 1, NAND2 11, NOR2 10, NOR2 11), the overall median is 8.22% and the 95th percentile is 25.29%. Those four states hold 607 of the 3,394 runs (17.9%) and have a pooled median error of 63.10%.
+* The per-state results are also in `results/gate_results_table.csv`.
+
+## 4. Deliverable 7: Gate parity plot
+
+The parity plot shows the 3,394 runs above 1e-13 A (100 fA) on log-log axes against the ideal y = x line. The SPICE leakage of these runs spans 1.0e-13 A to 4.9e-9 A.
+
 ![Gate Parity Plot](../results/plots/gate_parity_plot.png)
+
+## 5. Notes on the data
+
+* **Failed SPICE runs.** In 13 gate runs the SPICE leakage came back as exactly 0 (all AND2: 8 at input 00, 1 at 01, 4 at 10, at 12 different corners). `simulate_gate_spice` returns 0 when ngspice times out or prints no leakage line, and it falls back to default node voltages. Part B skips these runs. Part C does not skip them (`part_c_circuit_validation.md`, section 5).
+* **Noise floor.** The 1e-13 A filter is a choice made for the error statistics. It removes most of NOR2 11 (whose SPICE median is 1.1e-14 A), so its error figure rests on 58 runs.
