@@ -48,7 +48,7 @@ The investigation ran in four steps. The scripts and full outputs are in `diagno
 
 **Step 2: try other assembly formulas with the ML models (script 08).** Median error with the existing models, using different ways to assemble the supply current:
 
-| State | |Id| formula (final) | Is only | Is + Ib | |Id| formula + Ib |
+| State | \|Id\| formula (final) | Is only | Is + Ib | \|Id\| formula + Ib |
 |---|---|---|---|---|
 | INV 1 | 52.71% | 20.82% | 20.69% | 52.95% |
 | NAND2 11 | 53.77% | 21.45% | 21.02% | 53.63% |
@@ -59,7 +59,7 @@ Is + Ib is the best formula in every state. The |Id| formula is one of the two w
 
 **Step 3: check with SPICE only (script 10).** Each OFF PMOS was re-simulated as a single transistor at the exact bias it sees in the gate, and the true terminal currents were combined with each formula. No ML is involved:
 
-| State | n | |Id| formula, median error | Is + Ib (KCL), median error | |Id| formula in corners above 80 C |
+| State | n | \|Id\| formula, median error | Is + Ib (KCL), median error | \|Id\| formula in corners above 80 C |
 |---|---|---|---|---|
 | INV 1 | 200 | 52.62% | 0.0076% | 7.96% |
 | NAND2 11 | 200 | 52.63% | 0.0076% | 7.96% |
