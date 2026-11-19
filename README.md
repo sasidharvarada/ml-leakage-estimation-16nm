@@ -63,6 +63,42 @@ Not needed for the deliverables. They show why the final method looks the way it
 
 Scripts 06 and 07 need the results of step 5. Script 11 needs `scripts/03_train_models.py` next to it and retrains both models.
 
+## Testing your own cases
+
+`scripts/run_test_case.py` runs any test case through SPICE and the saved ML models side by side and prints the error. No retraining is needed. Each run takes a few seconds (all 128 CLA vectors: about 15 s).
+
+```bash
+# 3-bit CLA: a + b + cin (a, b = 0..7, cin = 0/1)
+python3 scripts/run_test_case.py cla --a 5 --b 3 --cin 0
+python3 scripts/run_test_case.py cla --a 7 --b 7 --cin 1 --temp 85 --vdd 1.05
+python3 scripts/run_test_case.py cla --all --corner 50          # all 128 vectors at one corner
+
+# one gate (INV, NAND2, NOR2, AND2, OR2) and input pattern, or all 18 cases
+python3 scripts/run_test_case.py gate --gate NAND2 --inp 11
+python3 scripts/run_test_case.py gate --gate all --temp 125
+
+# one transistor (nmos_on, nmos_off, pmos_on, pmos_off); W in nm
+python3 scripts/run_test_case.py fet --case nmos_off --vd 1.0 --vs 0 --w 32 --temp 85
+```
+
+Corner options (all commands):
+
+| Option | Meaning | Trained range |
+|---|---|---|
+| `--vdd 1.0` | supply voltage (V) | 0.9 – 1.1 |
+| `--temp 27` | temperature (°C) | −40 – 125 |
+| `--proc 1.0` | multiplier on all 5 process parameters (vth0, toxe, ndep, u0, xj) of NMOS and PMOS | 0.9 – 1.1 |
+| `--vth0 1.0` | extra multiplier on vth0 only | 0.9 – 1.1 |
+| `--corner K` | use corner K (0–199) of the official Part B / C corners (seed 123) | – |
+
+What it prints:
+
+* **cla:** the expected sum and the sum the SPICE circuit produced (logic check), P / G / carry values, then the leakage from the full-circuit SPICE netlist, the ML plain sum (project method), the ML loading-aware sum and the SPICE gate sum (no ML), each with error and accuracy, plus the leakage power V_DD × I. With `--all`: median error and mean accuracy over the 128 vectors (`--csv file.csv` saves the per-vector table).
+* **gate:** SPICE vs ML leakage of the isolated gate, error and output voltage.
+* **fet:** SPICE vs ML for Id, Ig, Is and Ib, the junction geometry (AD = AS = W × 40 nm, PD = PS = 2(W + 40 nm)) and the KCL check.
+
+Error = |ML − SPICE| / SPICE × 100 %, accuracy = 100 % − error. At an official corner (`--corner K`) the numbers match `results/part_c/circuit_raw.csv` exactly. The reported 92.07 % is the mean over 200 random corners, so a single vector or corner can be higher or lower (hot, low-vth0 corners are the hardest; see the error analysis in the report). The models run on the CPU, so no GPU is needed.
+
 ## How the ML works
 
 * **Targets:** log10(max(|I|, 1e-18 A)) for Id, Ig, Is and Ib. The models predict magnitudes. In Part A the sign of the SPICE reference is used to restore the sign. Parts B and C work with magnitudes.
